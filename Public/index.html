@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hidden Magic — Marché MTG de Rouyn-Noranda</title>
+<meta name="description" content="Hidden Magic : achetez et vendez vos cartes Magic: The Gathering entre joueurs de Rouyn-Noranda. Annonces, messagerie privée, modération. Aucun paiement en ligne.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#" data-nav="market">Hidden Magic<small>Rouyn-Noranda · MTG</small></a>
+  <nav id="mainnav">
+    <button class="navbtn active" data-nav="market">Marché</button>
+    <button class="navbtn" data-nav="publish" data-auth>Publier</button>
+    <button class="navbtn" data-nav="messages" data-auth>Messages</button>
+    <button class="navbtn" data-nav="admin" data-admin>Admin <span class="badge-count" id="adminBadge" hidden>0</span></button>
+    <button class="navbtn" data-nav="account" id="accountBtn">Connexion</button>
+  </nav>
+</header>
+
+<main>
+  <div id="blockedBanner" class="notice danger" hidden></div>
+  <div id="flash"></div>
+
+  <!-- Marché -->
+  <section class="view active" id="view-market">
+    <div class="hero">
+      <h1>Le marché des mages de Rouyn-Noranda</h1>
+      <p>Achetez et vendez vos cartes Magic: The Gathering entre joueurs d’ici. Échange en personne, aucun paiement en ligne.</p>
+      <div class="searchbar">
+        <input id="searchQ" type="search" placeholder="Rechercher une carte, une édition, un vendeur…" aria-label="Rechercher">
+        <select id="searchCondition" aria-label="Filtrer par état">
+          <option value="">Tous les états</option>
+          <option>Neuf</option>
+          <option>Comme neuf</option>
+          <option>Excellent</option>
+          <option>Bon</option>
+          <option>Usé</option>
+        </select>
+        <button class="btn" id="searchBtn">Rechercher</button>
+      </div>
+    </div>
+    <div id="listingGrid" class="grid"></div>
+    <div id="marketEmpty" class="empty" hidden>Aucune annonce pour le moment. Soyez le premier à publier une carte !</div>
+  </section>
+
+  <!-- Publier -->
+  <section class="view" id="view-publish">
+    <div class="panel">
+      <h2>Publier une annonce</h2>
+      <p class="meta">Votre annonce sera visible immédiatement dans le marché.</p>
+      <form id="publishForm">
+        <label for="fTitle">Nom de la carte *</label>
+        <input id="fTitle" required maxlength="120" placeholder="Ex. : Sol Ring">
+        <label for="fEdition">Édition *</label>
+        <input id="fEdition" required maxlength="120" placeholder="Ex. : Commander Masters">
+        <div class="row">
+          <div style="flex:1">
+            <label for="fCondition">État *</label>
+            <select id="fCondition">
+              <option>Neuf</option>
+              <option>Comme neuf</option>
+              <option>Excellent</option>
+              <option>Bon</option>
+              <option>Usé</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label for="fPrice">Prix ($ CA) *</label>
+            <input id="fPrice" required inputmode="decimal" placeholder="25,00">
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="fLang">Langue</label>
+            <select id="fLang"><option value="FR">Français</option><option value="EN">Anglais</option></select>
+          </div>
+          <div style="flex:1">
+            <label for="fFoil">Foil ?</label>
+            <select id="fFoil"><option value="0">Non</option><option value="1">Oui</option></select>
+          </div>
+        </div>
+        <label for="fPhoto">Photo de la carte</label>
+        <input id="fPhoto" type="file" accept="image/*">
+        <img id="photoPreview" class="photo-preview" hidden alt="Aperçu de la photo">
+        <button class="btn block" type="submit">Publier l’annonce</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Mes annonces</h2>
+      <div id="myListings"></div>
+    </div>
+  </section>
+
+  <!-- Messages -->
+  <section class="view" id="view-messages">
+    <div class="panel">
+      <h2>Mes conversations</h2>
+      <div id="convList"></div>
+    </div>
+  </section>
+
+  <!-- Fil de discussion -->
+  <section class="view" id="view-thread">
+    <div class="panel">
+      <div class="row space">
+        <h2 id="threadTitle" style="margin:0">Conversation</h2>
+        <button class="btn secondary small" data-nav="messages">← Retour</button>
+      </div>
+      <p class="meta" id="threadContext"></p>
+      <div id="threadBox" class="thread"></div>
+      <form id="messageForm" class="composer">
+        <input id="messageInput" maxlength="2000" placeholder="Écrire un message…" autocomplete="off">
+        <button class="btn" type="submit">Envoyer</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Admin -->
+  <section class="view" id="view-admin">
+    <div class="panel">
+      <h2>Signalements en attente</h2>
+      <div id="reportQueue"></div>
+    </div>
+    <div class="panel">
+      <h2>Toutes les annonces <span class="meta">(signalées en tête)</span></h2>
+      <div id="adminListings"></div>
+    </div>
+    <div class="panel">
+      <h2>Membres</h2>
+      <div id="adminUsers"></div>
+    </div>
+  </section>
+
+  <!-- Compte -->
+  <section class="view" id="view-account">
+    <div class="panel" id="authPanel">
+      <h2>Connexion</h2>
+      <form id="loginForm">
+        <label for="loginId">Nom d’utilisateur ou courriel</label>
+        <input id="loginId" required autocomplete="username">
+        <label for="loginPass">Mot de passe</label>
+        <input id="loginPass" type="password" required autocomplete="current-password">
+        <button class="btn block" type="submit">Se connecter</button>
+      </form>
+      <h2 style="margin-top:1.4rem">Créer un compte</h2>
+      <p class="meta">Le premier compte créé sur le site devient administrateur.</p>
+      <form id="registerForm">
+        <label for="regUser">Nom d’utilisateur</label>
+        <input id="regUser" required minlength="3" maxlength="30" autocomplete="username">
+        <label for="regEmail">Courriel</label>
+        <input id="regEmail" type="email" required autocomplete="email">
+        <label for="regPass">Mot de passe (8 caractères minimum)</label>
+        <input id="regPass" type="password" required minlength="8" autocomplete="new-password">
+        <button class="btn block" type="submit">Créer mon compte</button>
+      </form>
+    </div>
+    <div class="panel" id="profilePanel" hidden>
+      <h2>Mon compte</h2>
+      <p id="profileInfo"></p>
+      <button class="btn secondary" id="logoutBtn">Se déconnecter</button>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Hidden Magic — marché communautaire de Rouyn-Noranda.<br>
+  Aucun paiement en ligne : les échanges se concluent en personne.
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
