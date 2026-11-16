@@ -82,6 +82,8 @@ main { max-width: 960px; margin: 0 auto; padding: 1rem .9rem 4rem; }
   width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block;
   background: linear-gradient(135deg, #3a2350, #241b31);
 }
+.card img.trade-img { aspect-ratio: 63 / 88; }
+.card a.trade-img-link { display: block; }
 .card .nophoto { display: flex; align-items: center; justify-content: center; font-size: 2.4rem; color: var(--gold); font-family: var(--serif); }
 .card-body { padding: .7rem .8rem; display: flex; flex-direction: column; gap: .25rem; flex: 1; }
 .card-body h3 { margin: 0; font-size: 1rem; line-height: 1.3; }

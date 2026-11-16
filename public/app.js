@@ -156,7 +156,9 @@ function tradeItemCard(t) {
     .filter(Boolean).join(' ');
   return `
   <article class="card">
-    <div class="nophoto">⇄</div>
+    ${t.scryfall_id
+      ? `<a class="trade-img-link" href="https://api.scryfall.com/cards/${encodeURIComponent(t.scryfall_id)}?format=image&version=normal" target="_blank" rel="noopener"><img class="trade-img" src="https://api.scryfall.com/cards/${encodeURIComponent(t.scryfall_id)}?format=image&version=small" alt="${escapeHtml(t.name)}" loading="lazy" onerror="this.remove()"></a>`
+      : `<div class="nophoto">⇄</div>`}
     <div class="card-body">
       <h3>${escapeHtml(t.name)}</h3>
       ${edition ? `<div class="edition">${escapeHtml(edition)}</div>` : ''}
