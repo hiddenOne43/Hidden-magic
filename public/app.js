@@ -99,7 +99,7 @@ function listingCard(l) {
     <div class="card-body">
       <h3>${escapeHtml(l.title)}</h3>
       <div class="edition">${escapeHtml(l.edition)}</div>
-      <div class="price">${money(l.price_cents)} $ CA</div>
+      <div class="price">${money(l.price_cents)} CA</div>
       <div class="metaline">
         <span class="chip">${escapeHtml(l.condition)}</span>
         <span class="chip">${l.language === 'EN' ? 'Anglais' : 'Français'}</span>
@@ -254,7 +254,7 @@ async function loadConversations() {
   $('#convList').innerHTML = data.conversations.length
     ? data.conversations.map((c) => `
       <button class="conv" data-open-conv="${c.id}">
-        <strong>${escapeHtml(c.listing_title)}</strong> — ${money(c.listing_price)} $ CA
+        <strong>${escapeHtml(c.listing_title)}</strong> — ${String(c.listing_price).replace('.', ',')} $ CA
         ${c.listing_status === 'sold' ? '<span class="chip sold">Vendu</span>' : ''}<br>
         <span class="meta">Avec ${escapeHtml(c.other_name)}</span><br>
         <span class="last">${escapeHtml(c.last_body || 'Aucun message pour le moment.')}</span>
@@ -269,7 +269,7 @@ async function openConversation(id) {
   currentListing = c;
   $('#threadTitle').textContent = c.listing_title;
   $('#threadContext').innerHTML =
-    `Annonce : <strong>${escapeHtml(c.listing_title)}</strong> — ${money(c.listing_price)} $ CA` +
+    `Annonce : <strong>${escapeHtml(c.listing_title)}</strong> — ${String(c.listing_price).replace('.', ',')} $ CA` +
     (c.listing_status === 'sold' ? ' <span class="chip sold">Vendu</span>' : '') +
     ` · Avec ${escapeHtml(c.other_name)} ` +
     `<button class="btn secondary small" data-report-user="${c.other_id}">Signaler cet utilisateur</button>`;
@@ -334,7 +334,7 @@ async function loadAdmin() {
           <td>${escapeHtml(l.title)}<br><span class="meta">${escapeHtml(l.edition)}</span>
             ${l.report_count ? `<br><span class="chip reported">${l.report_count} signalement${l.report_count > 1 ? 's' : ''}</span>` : ''}</td>
           <td>${escapeHtml(l.seller)}</td>
-          <td>${money(l.price_cents)} $</td>
+          <td>${money(l.price_cents)}</td>
           <td>${l.status === 'sold' ? 'Vendu' : 'Active'}</td>
           <td><button class="btn danger small" data-delete-listing="${l.id}">Supprimer</button></td>
         </tr>`).join('') + '</tbody></table>'
