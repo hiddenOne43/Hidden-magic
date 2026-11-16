@@ -93,6 +93,7 @@ main { max-width: 960px; margin: 0 auto; padding: 1rem .9rem 4rem; }
   padding: 0 .5rem; font-size: .78rem; color: var(--muted); background: var(--bg-2);
 }
 .chip.sold { color: #fff; background: #5a2b2b; border-color: #7a3a3a; }
+.chip.want { color: var(--gold-soft); border-color: var(--gold); background: #2c2210; }
 .chip.reported { color: #fff; background: var(--danger); border-color: var(--danger); font-weight: 700; }
 .card-actions { display: flex; gap: .4rem; margin-top: .5rem; flex-wrap: wrap; }
 .btn {

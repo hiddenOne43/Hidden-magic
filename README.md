@@ -15,6 +15,15 @@ entre joueurs de Rouyn-Noranda. Échange en personne, **aucun paiement en ligne*
 - **Recherche** : par nom, édition ou vendeur, avec filtre par état.
 - **Messagerie privée** : l’acheteur contacte le vendeur depuis une annonce ;
   conversations listées par utilisateur, avec le contexte de l’annonce.
+- **Échange** : chaque joueur publie sa collection à échanger (cartes
+  possédées) et ses cartes recherchées, consultables par tous les visiteurs.
+  Import en un clic depuis un export CSV **ManaBox** (onglet Collection →
+  menu en haut à droite → Exporter → CSV) : les classeurs deviennent des
+  cartes « À échanger », les listes des cartes « Recherché ». L’import
+  remplace la collection d’échange actuelle, donc on réimporte pour la mettre
+  à jour. On peut aussi ajouter une carte à la main. Bouton « Proposer un
+  échange » sur chaque carte : il ouvre une conversation privée avec le
+  joueur, dans la messagerie existante.
 - **Signalements** : tout membre peut signaler une annonce, un message ou un
   utilisateur (motif facultatif). Un même membre ne peut pas signaler deux fois
   le même élément, ni se signaler lui-même.

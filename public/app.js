@@ -139,6 +139,147 @@ async function loadMyListings() {
 }
 
 // ---------------------------------------------------------------------------
+// Échange
+// ---------------------------------------------------------------------------
+let tradeBinderUserId = null; // null = tous les classeurs, sinon un joueur
+
+function langLabel(lang) {
+  if (lang === 'FR' || lang === 'French') return 'Français';
+  if (lang === 'EN' || lang === 'English') return 'Anglais';
+  return lang || '';
+}
+
+function tradeItemCard(t) {
+  const mine = me && me.id === t.user_id;
+  const canDelete = mine || (me && me.is_admin);
+  const edition = [t.set_name, t.set_code ? `(${t.set_code})` : '', t.collector_number ? `#${t.collector_number}` : '']
+    .filter(Boolean).join(' ');
+  return `
+  <article class="card">
+    <div class="nophoto">⇄</div>
+    <div class="card-body">
+      <h3>${escapeHtml(t.name)}</h3>
+      ${edition ? `<div class="edition">${escapeHtml(edition)}</div>` : ''}
+      <div class="metaline">
+        <span class="chip ${t.kind === 'want' ? 'want' : ''}">${t.kind === 'want' ? 'Recherché' : 'À échanger'}</span>
+        ${t.condition ? `<span class="chip">${escapeHtml(t.condition)}</span>` : ''}
+        ${t.language ? `<span class="chip">${escapeHtml(langLabel(t.language))}</span>` : ''}
+        ${t.foil ? '<span class="chip">Foil</span>' : ''}
+        <span class="chip">× ${t.quantity}</span>
+      </div>
+      ${t.binder_name ? `<div class="metaline">Classeur : ${escapeHtml(t.binder_name)}</div>` : ''}
+      <div class="metaline">Joueur : ${escapeHtml(t.seller)}</div>
+      <div class="card-actions">
+        ${!mine && me ? `<button class="btn small" data-contact-trade="${t.id}">Proposer un échange</button>` : ''}
+        ${!mine && !me ? `<button class="btn small secondary" data-goto-account="1">Se connecter pour proposer</button>` : ''}
+        ${canDelete ? `<button class="btn danger small" data-delete-trade="${t.id}">Supprimer</button>` : ''}
+      </div>
+    </div>
+  </article>`;
+}
+
+async function loadBinders() {
+  const data = await api('/api/trade/binders');
+  $('#tradeBinders').innerHTML = data.binders.length
+    ? data.binders.map((b) => `
+      <button class="conv" data-view-binder="${b.user_id}">
+        <strong>${escapeHtml(b.username)}</strong><br>
+        <span class="meta">${b.trade_count} à échanger · ${b.want_count} recherchée${b.want_count > 1 ? 's' : ''}</span>
+      </button>`).join('')
+    : '<p class="meta">Aucun classeur pour le moment.</p>';
+}
+
+async function loadTrade() {
+  $('#tradeImportPanel').hidden = !me;
+  $('#tradeManualPanel').hidden = !me;
+  $('#tradeLoginHint').hidden = !!me;
+  await loadBinders();
+  const q = $('#tradeQ').value.trim().toLowerCase();
+  const kind = $('#tradeKind').value;
+  let items;
+  let binderName = null;
+  if (tradeBinderUserId) {
+    const data = await api(`/api/trade/user/${tradeBinderUserId}`);
+    binderName = data.user.username;
+    items = data.items;
+  } else {
+    const params = new URLSearchParams();
+    if ($('#tradeQ').value.trim()) params.set('q', $('#tradeQ').value.trim());
+    if (kind) params.set('kind', kind);
+    const data = await api('/api/trade?' + params.toString());
+    items = data.items;
+  }
+  if (tradeBinderUserId) {
+    // Filtres appliqués côté client sur le classeur d'un joueur.
+    items = items.filter((t) =>
+      (!kind || t.kind === kind) &&
+      (!q || t.name.toLowerCase().includes(q) || (t.set_name || '').toLowerCase().includes(q) || t.seller.toLowerCase().includes(q)));
+  }
+  const bar = $('#tradeBinderBar');
+  if (tradeBinderUserId) {
+    bar.hidden = false;
+    bar.innerHTML = `Classeur de <strong>${escapeHtml(binderName || '')}</strong> — <button class="btn secondary small" data-trade-all>Voir tous les échanges</button>`;
+  } else {
+    bar.hidden = true;
+  }
+  $('#tradeGrid').innerHTML = items.map(tradeItemCard).join('');
+  $('#tradeEmpty').hidden = items.length > 0;
+}
+
+async function importTradeCsv() {
+  const file = $('#tradeCsvFile').files[0];
+  if (!file) { flash('Choisissez un fichier CSV ManaBox.', 'danger'); return; }
+  const btn = $('#tradeImportBtn');
+  btn.disabled = true;
+  btn.textContent = 'Import en cours…';
+  try {
+    const csv = await file.text();
+    const data = await api('/api/trade/import', { method: 'POST', body: JSON.stringify({ csv }) });
+    $('#tradeImportResult').textContent =
+      `${data.imported} carte(s) importée(s) : ${data.trade} à échanger, ${data.want} recherchée(s). ${data.skipped} ligne(s) ignorée(s).`;
+    flash(`Import terminé : ${data.imported} carte(s) importée(s).`, 'ok');
+    await loadTrade();
+  } catch (e) {
+    flash(e.message, 'danger');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Importer ma collection ManaBox';
+  }
+}
+
+function initTrade() {
+  $('#tradeImportBtn').addEventListener('click', importTradeCsv);
+  $('#tradeSearchBtn').addEventListener('click', loadTrade);
+  $('#tradeQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadTrade(); });
+  $('#tradeKind').addEventListener('change', loadTrade);
+  $('#tradeManualForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/api/trade', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: $('#tName').value.trim(),
+          set_name: $('#tSetName').value.trim(),
+          set_code: $('#tSetCode').value.trim(),
+          collector_number: $('#tCollector').value.trim(),
+          quantity: $('#tQuantity').value,
+          condition: $('#tCondition').value,
+          language: $('#tLang').value,
+          kind: $('#tKind').value,
+          foil: $('#tFoil').value === '1',
+        }),
+      });
+      flash(`« ${data.item.name} » ajouté à l’échange.`, 'ok');
+      e.target.reset();
+      $('#tQuantity').value = '1';
+      await loadTrade();
+    } catch (err) {
+      flash(err.message, 'danger');
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Signalement (boîte de dialogue simple)
 // ---------------------------------------------------------------------------
 function askReason(title) {
@@ -254,8 +395,10 @@ async function loadConversations() {
   $('#convList').innerHTML = data.conversations.length
     ? data.conversations.map((c) => `
       <button class="conv" data-open-conv="${c.id}">
-        <strong>${escapeHtml(c.listing_title)}</strong> — ${String(c.listing_price).replace('.', ',')} $ CA
-        ${c.listing_status === 'sold' ? '<span class="chip sold">Vendu</span>' : ''}<br>
+        ${c.kind === 'trade'
+          ? `<strong>Échange : ${escapeHtml(c.trade_name || 'carte')}</strong> <span class="chip">Échange</span>`
+          : `<strong>${escapeHtml(c.listing_title)}</strong>${c.listing_price != null ? ` — ${String(c.listing_price).replace('.', ',')} $ CA` : ''}`}
+        ${c.kind === 'listing' && c.listing_status === 'sold' ? '<span class="chip sold">Vendu</span>' : ''}<br>
         <span class="meta">Avec ${escapeHtml(c.other_name)}</span><br>
         <span class="last">${escapeHtml(c.last_body || 'Aucun message pour le moment.')}</span>
       </button>`).join('')
@@ -267,12 +410,15 @@ async function openConversation(id) {
   const data = await api(`/api/conversations/${id}/messages`);
   const c = data.conversation;
   currentListing = c;
-  $('#threadTitle').textContent = c.listing_title;
-  $('#threadContext').innerHTML =
-    `Annonce : <strong>${escapeHtml(c.listing_title)}</strong> — ${String(c.listing_price).replace('.', ',')} $ CA` +
-    (c.listing_status === 'sold' ? ' <span class="chip sold">Vendu</span>' : '') +
-    ` · Avec ${escapeHtml(c.other_name)} ` +
-    `<button class="btn secondary small" data-report-user="${c.other_id}">Signaler cet utilisateur</button>`;
+  const isTrade = c.kind === 'trade';
+  $('#threadTitle').textContent = isTrade ? `Échange : ${c.trade_name || 'carte'}` : c.listing_title;
+  $('#threadContext').innerHTML = isTrade
+    ? `Échange : <strong>${escapeHtml(c.trade_name || 'carte')}</strong>${c.trade_kind === 'want' ? ' <span class="chip">Recherché</span>' : ''} · Avec ${escapeHtml(c.other_name)} ` +
+      `<button class="btn secondary small" data-report-user="${c.other_id}">Signaler cet utilisateur</button>`
+    : `Annonce : <strong>${escapeHtml(c.listing_title)}</strong>${c.listing_price != null ? ` — ${String(c.listing_price).replace('.', ',')} $ CA` : ''}` +
+      (c.listing_status === 'sold' ? ' <span class="chip sold">Vendu</span>' : '') +
+      ` · Avec ${escapeHtml(c.other_name)} ` +
+      `<button class="btn secondary small" data-report-user="${c.other_id}">Signaler cet utilisateur</button>`;
   $('#threadBox').innerHTML = data.messages.length
     ? data.messages.map((m) => `
       <div class="msg ${m.sender_id === me.id ? 'mine' : ''}">
@@ -431,7 +577,40 @@ document.addEventListener('click', async (e) => {
     if (view === 'messages') await loadConversations();
     if (view === 'publish') await loadMyListings();
     if (view === 'admin') await loadAdmin();
+    if (view === 'trade') await loadTrade();
     showView(view);
+    return;
+  }
+  const contactTrade = e.target.closest('[data-contact-trade]');
+  if (contactTrade) {
+    try {
+      const data = await api(`/api/trade/${contactTrade.dataset.contactTrade}/contact`, { method: 'POST' });
+      await openConversation(data.conversation_id);
+    } catch (err) {
+      flash(err.message, 'danger');
+    }
+    return;
+  }
+  const delTrade = e.target.closest('[data-delete-trade]');
+  if (delTrade) {
+    if (!window.confirm('Supprimer cette carte de l’échange ?')) return;
+    try {
+      await api(`/api/trade/${delTrade.dataset.deleteTrade}`, { method: 'DELETE' });
+      flash('Carte supprimée de l’échange.', 'ok');
+      await loadTrade();
+    } catch (err) { flash(err.message, 'danger'); }
+    return;
+  }
+  const viewBinder = e.target.closest('[data-view-binder]');
+  if (viewBinder) {
+    tradeBinderUserId = Number(viewBinder.dataset.viewBinder);
+    await loadTrade();
+    return;
+  }
+  const tradeAll = e.target.closest('[data-trade-all]');
+  if (tradeAll) {
+    tradeBinderUserId = null;
+    await loadTrade();
     return;
   }
   const contact = e.target.closest('[data-contact]');
@@ -502,6 +681,7 @@ $('#messageForm').addEventListener('submit', sendMessage);
 (async () => {
   initAuth();
   await initPublish();
+  initTrade();
   await refreshMe();
   await loadMarket();
 })();

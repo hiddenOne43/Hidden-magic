@@ -14,6 +14,7 @@
   <a class="brand" href="#" data-nav="market">Hidden Magic<small>Rouyn-Noranda · MTG</small></a>
   <nav id="mainnav">
     <button class="navbtn active" data-nav="market">Marché</button>
+    <button class="navbtn" data-nav="trade">Échange</button>
     <button class="navbtn" data-nav="publish" data-auth>Publier</button>
     <button class="navbtn" data-nav="messages" data-auth>Messages</button>
     <button class="navbtn" data-nav="admin" data-admin>Admin <span class="badge-count" id="adminBadge" hidden>0</span></button>
@@ -45,6 +46,99 @@
     </div>
     <div id="listingGrid" class="grid"></div>
     <div id="marketEmpty" class="empty" hidden>Aucune annonce pour le moment. Soyez le premier à publier une carte !</div>
+  </section>
+
+  <!-- Échange -->
+  <section class="view" id="view-trade">
+    <div class="hero">
+      <h1>Échangez vos cartes</h1>
+      <p>Publiez votre collection à échanger et consultez celle des autres joueurs. Proposez un échange par messagerie privée — aucun paiement en ligne.</p>
+    </div>
+    <p class="meta" id="tradeLoginHint">Connectez-vous pour importer votre collection ou ajouter des cartes à échanger.</p>
+    <div class="panel" id="tradeImportPanel" hidden>
+      <h2>Ma collection à échanger</h2>
+      <p class="meta">Importez votre collection ManaBox : dans ManaBox, onglet Collection → menu en haut à droite → Exporter → CSV. L’import remplace votre collection d’échange actuelle sur le site (réimportez pour la mettre à jour). Les classeurs deviennent des cartes « À échanger », les listes des cartes « Recherché ».</p>
+      <label for="tradeCsvFile">Fichier CSV ManaBox (.csv)</label>
+      <input id="tradeCsvFile" type="file" accept=".csv,text/csv">
+      <button class="btn" id="tradeImportBtn" type="button" style="margin-top:.6rem">Importer ma collection ManaBox</button>
+      <div id="tradeImportResult" class="meta" style="margin-top:.6rem"></div>
+    </div>
+    <div class="panel" id="tradeManualPanel" hidden>
+      <h2>Ajouter une carte manuellement</h2>
+      <form id="tradeManualForm">
+        <label for="tName">Nom de la carte *</label>
+        <input id="tName" required maxlength="120" placeholder="Ex. : Sol Ring">
+        <div class="row">
+          <div style="flex:2">
+            <label for="tSetName">Édition</label>
+            <input id="tSetName" maxlength="120" placeholder="Ex. : Commander Masters">
+          </div>
+          <div style="flex:1">
+            <label for="tSetCode">Code d’édition</label>
+            <input id="tSetCode" maxlength="20" placeholder="Ex. : CMM">
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="tCollector">Nº de collection</label>
+            <input id="tCollector" maxlength="20" placeholder="Ex. : 123">
+          </div>
+          <div style="flex:1">
+            <label for="tQuantity">Quantité</label>
+            <input id="tQuantity" type="number" min="1" max="999" value="1">
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="tCondition">État</label>
+            <select id="tCondition">
+              <option value="">—</option>
+              <option>Neuf</option>
+              <option>Comme neuf</option>
+              <option>Excellent</option>
+              <option>Bon</option>
+              <option>Usé</option>
+              <option>Near Mint</option>
+              <option>Lightly Played</option>
+              <option>Moderately Played</option>
+              <option>Heavily Played</option>
+              <option>Damaged</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label for="tLang">Langue</label>
+            <select id="tLang"><option value="FR">Français</option><option value="EN">Anglais</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="tKind">Type</label>
+            <select id="tKind"><option value="trade">À échanger</option><option value="want">Recherché</option></select>
+          </div>
+          <div style="flex:1">
+            <label for="tFoil">Foil ?</label>
+            <select id="tFoil"><option value="0">Non</option><option value="1">Oui</option></select>
+          </div>
+        </div>
+        <button class="btn block" type="submit">Ajouter à l’échange</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Classeurs des joueurs</h2>
+      <div id="tradeBinders"></div>
+    </div>
+    <div id="tradeBinderBar" class="notice" hidden></div>
+    <div class="searchbar">
+      <input id="tradeQ" type="search" placeholder="Rechercher une carte, une édition, un joueur…" aria-label="Rechercher dans l’échange">
+      <select id="tradeKind" aria-label="Filtrer par type">
+        <option value="">Tout</option>
+        <option value="trade">À échanger</option>
+        <option value="want">Recherché</option>
+      </select>
+      <button class="btn" id="tradeSearchBtn">Rechercher</button>
+    </div>
+    <div id="tradeGrid" class="grid"></div>
+    <div id="tradeEmpty" class="empty" hidden>Aucune carte à échanger pour le moment. Importez votre collection ManaBox ou ajoutez une carte !</div>
   </section>
 
   <!-- Publier -->

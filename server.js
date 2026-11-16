@@ -69,7 +69,10 @@ async function initDb() {
     );
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      listing_id INTEGER NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      listing_id INTEGER REFERENCES listings(id) ON DELETE CASCADE,
+      trade_item_id INTEGER REFERENCES trade_items(id) ON DELETE SET NULL,
+      context_label TEXT NOT NULL DEFAULT '',
+      context_kind TEXT NOT NULL DEFAULT 'listing',
       buyer_id INTEGER NOT NULL REFERENCES users(id),
       seller_id INTEGER NOT NULL REFERENCES users(id),
       created_at TEXT NOT NULL,
@@ -97,7 +100,64 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_listings_title ON listings(title);
     CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
+    CREATE TABLE IF NOT EXISTS trade_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      set_code TEXT NOT NULL DEFAULT '',
+      set_name TEXT NOT NULL DEFAULT '',
+      collector_number TEXT NOT NULL DEFAULT '',
+      foil INTEGER NOT NULL DEFAULT 0,
+      condition TEXT NOT NULL DEFAULT '',
+      language TEXT NOT NULL DEFAULT '',
+      quantity INTEGER NOT NULL DEFAULT 1,
+      scryfall_id TEXT NOT NULL DEFAULT '',
+      binder_name TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL DEFAULT 'trade',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_user ON trade_items(user_id);
+    CREATE INDEX IF NOT EXISTS idx_trade_kind ON trade_items(kind);
+    CREATE INDEX IF NOT EXISTS idx_trade_name ON trade_items(name);
   `);
+
+  // Migration : une conversation peut porter sur un article d'échange
+  // (listing_id devient facultatif ; ajout de trade_item_id, context_label
+  // et context_kind). Sans effet sur les conversations d'annonces et les
+  // messages existants. Idempotente.
+  // Attention : libsql applique les clés étrangères par défaut ; il faut
+  // couper leur vérification pendant la reconstruction de la table, sinon
+  // la suppression de l'ancienne table efface les messages en cascade
+  // (ON DELETE CASCADE). Tout passe par un seul executeMultiple pour rester
+  // sur la même connexion (PRAGMA foreign_keys est propre à la connexion).
+  const convCols = await db.execute('PRAGMA table_info(conversations)');
+  const convColNames = convCols.rows.map((r) => r.name);
+  if (!convColNames.includes('trade_item_id')) {
+    await db.executeMultiple(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS conversations_new;
+      CREATE TABLE conversations_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        listing_id INTEGER REFERENCES listings(id) ON DELETE CASCADE,
+        trade_item_id INTEGER REFERENCES trade_items(id) ON DELETE SET NULL,
+        context_label TEXT NOT NULL DEFAULT '',
+        context_kind TEXT NOT NULL DEFAULT 'listing',
+        buyer_id INTEGER NOT NULL REFERENCES users(id),
+        seller_id INTEGER NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        UNIQUE (listing_id, buyer_id)
+      );
+      INSERT INTO conversations_new (id, listing_id, trade_item_id, context_label, context_kind, buyer_id, seller_id, created_at)
+        SELECT id, listing_id, NULL, '', 'listing', buyer_id, seller_id, created_at FROM conversations;
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+      PRAGMA foreign_keys = ON;
+    `);
+    const fkCheck = await db.execute('PRAGMA foreign_key_check');
+    if (fkCheck.rows.length > 0) {
+      console.error('Migration des conversations : violations de clés étrangères :', fkCheck.rows);
+    }
+  }
 }
 
 const nowIso = () => new Date().toISOString();
@@ -437,9 +497,12 @@ api.delete('/listings/:id', requireAuth, asyncHandler(async (req, res) => {
 async function getConversationForUser(convId, userId) {
   const rows = await db.execute({
     sql: `SELECT c.*, l.title AS listing_title, l.price_cents, l.status AS listing_status,
+                 COALESCE(t.name, c.context_label) AS trade_name,
+                 t.kind AS trade_kind,
                  b.username AS buyer_name, s.username AS seller_name
           FROM conversations c
-          JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN trade_items t ON t.id = c.trade_item_id
           JOIN users b ON b.id = c.buyer_id
           JOIN users s ON s.id = c.seller_id
           WHERE c.id = ? AND (c.buyer_id = ? OR c.seller_id = ?)`,
@@ -448,40 +511,53 @@ async function getConversationForUser(convId, userId) {
   return rows.rows[0] || null;
 }
 
+// Forme d'une conversation pour le client : annonce OU échange.
+// Le type est figé à la création (context_kind) : il survit à la
+// suppression de l'article d'échange (trade_item_id mis à NULL).
+function conversationView(c, meId) {
+  const isTrade = c.context_kind === 'trade';
+  return {
+    id: c.id,
+    kind: isTrade ? 'trade' : 'listing',
+    listing_id: c.listing_id || null,
+    listing_title: c.listing_title || null,
+    listing_price: c.price_cents != null ? (c.price_cents / 100).toFixed(2) : null,
+    listing_status: c.listing_status || null,
+    listing_photo: c.listing_photo || null,
+    trade_item_id: c.trade_item_id || null,
+    trade_name: c.trade_name || null,
+    trade_kind: c.trade_kind || null,
+    buyer_id: c.buyer_id,
+    buyer_name: c.buyer_name,
+    seller_id: c.seller_id,
+    seller_name: c.seller_name,
+    other_name: c.buyer_id === meId ? c.seller_name : c.buyer_name,
+    other_id: c.buyer_id === meId ? c.seller_id : c.buyer_id,
+    last_body: c.last_body || null,
+    last_at: c.last_at || c.created_at,
+    created_at: c.created_at,
+  };
+}
+
 api.get('/conversations', requireAuth, asyncHandler(async (req, res) => {
   const rows = await db.execute({
     sql: `SELECT c.*, l.title AS listing_title, l.price_cents, l.status AS listing_status,
                  l.photo AS listing_photo,
+                 COALESCE(t.name, c.context_label) AS trade_name,
+                 t.kind AS trade_kind,
                  b.username AS buyer_name, s.username AS seller_name,
                  (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_body,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_at
           FROM conversations c
-          JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN trade_items t ON t.id = c.trade_item_id
           JOIN users b ON b.id = c.buyer_id
           JOIN users s ON s.id = c.seller_id
           WHERE c.buyer_id = ? OR c.seller_id = ?
           ORDER BY COALESCE(last_at, c.created_at) DESC`,
     args: [req.user.id, req.user.id],
   });
-  res.json({
-    conversations: rows.rows.map((c) => ({
-      id: c.id,
-      listing_id: c.listing_id,
-      listing_title: c.listing_title,
-      listing_price: (c.price_cents / 100).toFixed(2),
-      listing_status: c.listing_status,
-      listing_photo: c.listing_photo || null,
-      buyer_id: c.buyer_id,
-      buyer_name: c.buyer_name,
-      seller_id: c.seller_id,
-      seller_name: c.seller_name,
-      other_name: c.buyer_id === req.user.id ? c.seller_name : c.buyer_name,
-      other_id: c.buyer_id === req.user.id ? c.seller_id : c.buyer_id,
-      last_body: c.last_body || null,
-      last_at: c.last_at || c.created_at,
-      created_at: c.created_at,
-    })),
-  });
+  res.json({ conversations: rows.rows.map((c) => conversationView(c, req.user.id)) });
 }));
 
 api.post('/conversations', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
@@ -501,7 +577,7 @@ api.post('/conversations', requireAuth, requireNotBlocked, asyncHandler(async (r
   });
   if (existing.rows[0]) return res.json({ conversation_id: existing.rows[0].id, existing: true });
   const r = await db.execute({
-    sql: 'INSERT INTO conversations (listing_id, buyer_id, seller_id, created_at) VALUES (?, ?, ?, ?)',
+    sql: 'INSERT INTO conversations (listing_id, trade_item_id, context_label, context_kind, buyer_id, seller_id, created_at) VALUES (?, NULL, \'\', \'listing\', ?, ?, ?)',
     args: [listingId, req.user.id, listing.user_id, nowIso()],
   });
   res.status(201).json({ conversation_id: Number(r.lastInsertRowid), existing: false });
@@ -522,10 +598,14 @@ api.get('/conversations/:id/messages', requireAuth, asyncHandler(async (req, res
   res.json({
     conversation: {
       id: conv.id,
-      listing_id: conv.listing_id,
-      listing_title: conv.listing_title,
-      listing_price: (conv.price_cents / 100).toFixed(2),
-      listing_status: conv.listing_status,
+      kind: conv.context_kind === 'trade' ? 'trade' : 'listing',
+      listing_id: conv.listing_id || null,
+      listing_title: conv.listing_title || null,
+      listing_price: conv.price_cents != null ? (conv.price_cents / 100).toFixed(2) : null,
+      listing_status: conv.listing_status || null,
+      trade_item_id: conv.trade_item_id || null,
+      trade_name: conv.trade_name || null,
+      trade_kind: conv.trade_kind || null,
       buyer_name: conv.buyer_name,
       seller_name: conv.seller_name,
       other_id: otherId,
@@ -555,6 +635,262 @@ api.post('/conversations/:id/messages', requireAuth, requireNotBlocked, asyncHan
     args: [conv.id, req.user.id, body, nowIso()],
   });
   res.status(201).json({ id: Number(r.lastInsertRowid), sender_id: req.user.id, sender_name: req.user.username, body, created_at: nowIso() });
+}));
+
+// ---------------------------------------------------------------------------
+// Échange (collection à échanger + cartes recherchées, import ManaBox)
+// ---------------------------------------------------------------------------
+function tradeItemView(r) {
+  return {
+    id: r.id,
+    user_id: r.user_id,
+    seller: r.seller,
+    name: r.name,
+    set_code: r.set_code,
+    set_name: r.set_name,
+    collector_number: r.collector_number,
+    foil: !!r.foil,
+    condition: r.condition,
+    language: r.language,
+    quantity: Number(r.quantity),
+    scryfall_id: r.scryfall_id,
+    binder_name: r.binder_name,
+    kind: r.kind,
+    created_at: r.created_at,
+  };
+}
+
+const TRADE_SELECT = `
+  SELECT t.*, u.username AS seller
+  FROM trade_items t JOIN users u ON u.id = t.user_id`;
+
+// Analyseur CSV écrit à la main (champs entre guillemets, virgules et
+// guillemets doublés "" gérés ; fins de ligne LF, CRLF ou CR).
+function parseCsv(text) {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // BOM éventuel
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      rows.push(row); row = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const MAX_IMPORT_ROWS = 5000;
+
+api.get('/trade', asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const kind = String(req.query.kind || '').trim();
+  const where = [];
+  const args = [];
+  if (q) {
+    where.push('(t.name LIKE ? OR t.set_name LIKE ? OR u.username LIKE ?)');
+    const like = `%${q}%`;
+    args.push(like, like, like);
+  }
+  if (kind === 'trade' || kind === 'want') {
+    where.push('t.kind = ?');
+    args.push(kind);
+  }
+  const rows = await db.execute({
+    sql: `${TRADE_SELECT}${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY t.created_at DESC LIMIT 100`,
+    args,
+  });
+  res.json({ items: rows.rows.map(tradeItemView) });
+}));
+
+api.get('/trade/binders', asyncHandler(async (req, res) => {
+  const rows = await db.execute({
+    sql: `SELECT u.id AS user_id, u.username,
+                 SUM(CASE WHEN t.kind = 'trade' THEN 1 ELSE 0 END) AS trade_count,
+                 SUM(CASE WHEN t.kind = 'want' THEN 1 ELSE 0 END) AS want_count,
+                 COUNT(*) AS total
+          FROM trade_items t JOIN users u ON u.id = t.user_id
+          GROUP BY u.id, u.username ORDER BY total DESC`,
+    args: [],
+  });
+  res.json({
+    binders: rows.rows.map((b) => ({
+      user_id: b.user_id,
+      username: b.username,
+      trade_count: Number(b.trade_count),
+      want_count: Number(b.want_count),
+      total: Number(b.total),
+    })),
+  });
+}));
+
+api.get('/trade/user/:userId', asyncHandler(async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId)) return res.status(400).json({ error: 'Utilisateur invalide.' });
+  const user = await db.execute({ sql: 'SELECT id, username FROM users WHERE id = ?', args: [userId] });
+  if (!user.rows[0]) return res.status(404).json({ error: 'Utilisateur introuvable.' });
+  const rows = await db.execute({
+    sql: `${TRADE_SELECT} WHERE t.user_id = ? ORDER BY t.kind ASC, t.created_at DESC LIMIT 500`,
+    args: [userId],
+  });
+  res.json({ user: { id: user.rows[0].id, username: user.rows[0].username }, items: rows.rows.map(tradeItemView) });
+}));
+
+api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
+  const csv = typeof req.body?.csv === 'string' ? req.body.csv : '';
+  if (!csv.trim()) return res.status(400).json({ error: 'Fichier CSV vide.' });
+  if (csv.length > 2_000_000) return res.status(400).json({ error: 'Fichier CSV trop volumineux.' });
+  const rows = parseCsv(csv);
+  if (!rows.length) return res.status(400).json({ error: 'Fichier CSV vide.' });
+  const headers = rows[0].map((h) => String(h || '').trim().toLowerCase());
+  const col = (name) => headers.indexOf(name.toLowerCase());
+  const idx = {
+    binderName: col('Binder Name'),
+    binderType: col('Binder Type'),
+    name: col('Name'),
+    setCode: col('Set code'),
+    setName: col('Set name'),
+    collectorNumber: col('Collector number'),
+    foil: col('Foil'),
+    quantity: col('Quantity'),
+    scryfallId: col('Scryfall ID'),
+    condition: col('Condition'),
+    language: col('Language'),
+  };
+  if (idx.name < 0) {
+    return res.status(400).json({ error: 'Colonne « Name » introuvable dans le CSV. Vérifiez qu’il s’agit bien d’un export ManaBox.' });
+  }
+  const cell = (r, i) => (i >= 0 && i < r.length ? String(r[i] ?? '').trim() : '');
+  let imported = 0;
+  let trade = 0;
+  let want = 0;
+  let skipped = 0;
+  const items = [];
+  for (let n = 1; n < rows.length; n++) {
+    const r = rows[n];
+    if (n > MAX_IMPORT_ROWS) { skipped++; continue; }
+    if (r.every((c) => String(c ?? '').trim() === '')) continue; // ligne vide
+    const name = cell(r, idx.name);
+    if (!name) { skipped++; continue; }
+    const binderType = cell(r, idx.binderType).toLowerCase();
+    let kind;
+    if (binderType.includes('list')) kind = 'want';
+    else if (binderType.includes('binder')) kind = 'trade';
+    else { skipped++; continue; }
+    const foilRaw = cell(r, idx.foil).toLowerCase();
+    const foil = ['yes', 'true', '1', 'oui'].includes(foilRaw) ? 1 : 0;
+    let quantity = parseInt(cell(r, idx.quantity) || '1', 10);
+    if (!Number.isFinite(quantity) || quantity < 1) quantity = 1;
+    if (quantity > 999) quantity = 999;
+    items.push({
+      name: name.slice(0, 120),
+      set_code: cell(r, idx.setCode).slice(0, 20),
+      set_name: cell(r, idx.setName).slice(0, 120),
+      collector_number: cell(r, idx.collectorNumber).slice(0, 20),
+      foil,
+      condition: cell(r, idx.condition).slice(0, 40),
+      language: cell(r, idx.language).slice(0, 30),
+      quantity,
+      scryfall_id: cell(r, idx.scryfallId).slice(0, 50),
+      binder_name: cell(r, idx.binderName).slice(0, 80),
+      kind,
+    });
+    if (kind === 'trade') trade++;
+    else want++;
+    imported++;
+  }
+  // L'import remplace la collection d'échange actuelle (réimport = mise à jour).
+  await db.execute({ sql: 'DELETE FROM trade_items WHERE user_id = ?', args: [req.user.id] });
+  for (const it of items) {
+    await db.execute({
+      sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, nowIso()],
+    });
+  }
+  res.json({ imported, trade, want, skipped });
+}));
+
+api.post('/trade', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const kind = req.body?.kind === 'want' ? 'want' : 'trade';
+  const setCode = String(req.body?.set_code || '').trim().slice(0, 20);
+  const setName = String(req.body?.set_name || '').trim().slice(0, 120);
+  const collectorNumber = String(req.body?.collector_number || '').trim().slice(0, 20);
+  const foil = req.body?.foil ? 1 : 0;
+  const condition = String(req.body?.condition || '').trim().slice(0, 40);
+  const language = String(req.body?.language || '').trim().slice(0, 30);
+  const binderName = String(req.body?.binder_name || '').trim().slice(0, 80);
+  let quantity = parseInt(String(req.body?.quantity ?? '1'), 10);
+  if (!Number.isFinite(quantity) || quantity < 1) quantity = 1;
+  if (quantity > 999) quantity = 999;
+  if (name.length < 2 || name.length > 120) return res.status(400).json({ error: 'Le nom de la carte est requis (2 à 120 caractères).' });
+  const r = await db.execute({
+    sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+    args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, binderName, kind, nowIso()],
+  });
+  const rows = await db.execute({ sql: `${TRADE_SELECT} WHERE t.id = ?`, args: [Number(r.lastInsertRowid)] });
+  res.status(201).json({ item: tradeItemView(rows.rows[0]) });
+}));
+
+api.delete('/trade/:id', requireAuth, asyncHandler(async (req, res) => {
+  const id = paramId(req);
+  if (id === null) return res.status(400).json({ error: 'Article invalide.' });
+  const rows = await db.execute({ sql: 'SELECT * FROM trade_items WHERE id = ?', args: [id] });
+  const item = rows.rows[0];
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  if (item.user_id !== req.user.id && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Vous ne pouvez supprimer que vos propres articles d’échange.' });
+  }
+  // Les conversations liées gardent leur contexte (nom de la carte) sans l'article.
+  await db.execute({ sql: 'UPDATE conversations SET trade_item_id = NULL WHERE trade_item_id = ?', args: [id] });
+  await db.execute({ sql: 'DELETE FROM trade_items WHERE id = ?', args: [id] });
+  res.json({ ok: true });
+}));
+
+api.post('/trade/:id/contact', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
+  const id = paramId(req);
+  if (id === null) return res.status(400).json({ error: 'Article invalide.' });
+  const rows = await db.execute({
+    sql: `${TRADE_SELECT} WHERE t.id = ?`,
+    args: [id],
+  });
+  const item = rows.rows[0];
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  if (item.user_id === req.user.id) {
+    return res.status(400).json({ error: 'Vous ne pouvez pas vous écrire à vous-même.' });
+  }
+  const seller = await db.execute({ sql: 'SELECT * FROM users WHERE id = ?', args: [item.user_id] });
+  if (seller.rows[0]?.is_blocked) {
+    return res.status(403).json({ error: 'Cet utilisateur est bloqué et ne peut pas être contacté.' });
+  }
+  const existing = await db.execute({
+    sql: 'SELECT id FROM conversations WHERE trade_item_id = ? AND buyer_id = ?',
+    args: [id, req.user.id],
+  });
+  if (existing.rows[0]) return res.json({ conversation_id: existing.rows[0].id, existing: true });
+  const label = item.set_name ? `${item.name} (${item.set_name})` : item.name;
+  const r = await db.execute({
+    sql: 'INSERT INTO conversations (listing_id, trade_item_id, context_label, context_kind, buyer_id, seller_id, created_at) VALUES (NULL, ?, ?, \'trade\', ?, ?, ?)',
+    args: [id, label, req.user.id, item.user_id, nowIso()],
+  });
+  res.status(201).json({ conversation_id: Number(r.lastInsertRowid), existing: false });
 }));
 
 // ---------------------------------------------------------------------------
