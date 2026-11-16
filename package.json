@@ -1,0 +1,1 @@
+{"dependencies":{"@libsql/client":"^0.18.0","express":"^5.3.0"},"description":"Hidden Magic — marché Magic: The Gathering pour les joueurs de Rouyn-Noranda (comptes, annonces, messagerie privée, modération).","engines":{"node":">=18"},"main":"server.js","name":"hidden-magic","private":true,"scripts":{"start":"node server.js"},"version":"1.0.0"}

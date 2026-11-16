@@ -1,0 +1,19 @@
+# Blueprint Render pour Hidden Magic (service web gratuit).
+# Déploiement : dans le tableau de bord Render, « New » → « Blueprint »,
+# puis connectez le dépôt contenant ce fichier.
+services:
+  - type: web
+    name: hidden-magic
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
