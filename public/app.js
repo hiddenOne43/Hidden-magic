@@ -179,7 +179,7 @@ function langLabel(lang) {
   return lang || '';
 }
 
-function tradeItemCard(t) {
+function tradeItemCard(t, context = 'trade') {
   const mine = me && me.id === t.user_id;
   const canDelete = mine || (me && me.is_admin);
   const edition = [t.set_name, t.set_code ? `(${t.set_code})` : '', t.collector_number ? `#${t.collector_number}` : '']
@@ -194,6 +194,7 @@ function tradeItemCard(t) {
       ${edition ? `<div class="edition">${escapeHtml(edition)}</div>` : ''}
       <div class="metaline">
         <span class="chip ${t.kind === 'want' ? 'want' : ''}">${t.kind === 'want' ? 'Recherché' : 'À échanger'}</span>
+        ${context === 'collection' && t.kind === 'trade' && t.offered ? '<span class="chip offered">En échange</span>' : ''}
         ${t.condition ? `<span class="chip">${escapeHtml(t.condition)}</span>` : ''}
         ${t.language ? `<span class="chip">${escapeHtml(langLabel(t.language))}</span>` : ''}
         ${t.foil ? '<span class="chip">Foil</span>' : ''}
@@ -203,8 +204,13 @@ function tradeItemCard(t) {
       ${t.binder_name ? `<div class="metaline">Classeur : ${escapeHtml(t.binder_name)}</div>` : ''}
       <div class="metaline">Joueur : ${escapeHtml(t.seller)}</div>
       <div class="card-actions">
-        ${!mine && me ? `<button class="btn small" data-contact-trade="${t.id}">Proposer un échange</button>` : ''}
+        ${context === 'collection'
+          ? (t.kind === 'trade'
+            ? `<button class="btn small" data-offer-trade="${t.id}" data-offered="${t.offered ? 0 : 1}">${t.offered ? 'Retirer de l’échange' : 'Proposer en échange'}</button>`
+            : '')
+          : `${!mine && me ? `<button class="btn small" data-contact-trade="${t.id}">Proposer un échange</button>` : ''}
         ${!mine && !me ? `<button class="btn small secondary" data-goto-account="1">Se connecter pour proposer</button>` : ''}
+        ${mine && t.kind === 'trade' && t.offered ? `<button class="btn secondary small" data-offer-trade="${t.id}" data-offered="0">Retirer de l’échange</button>` : ''}`}
         ${canDelete ? `<button class="btn danger small" data-delete-trade="${t.id}">Supprimer</button>` : ''}
       </div>
     </div>
@@ -255,8 +261,17 @@ async function loadTrade() {
   } else {
     bar.hidden = true;
   }
-  $('#tradeGrid').innerHTML = items.map(tradeItemCard).join('');
+  $('#tradeGrid').innerHTML = items.map((t) => tradeItemCard(t, 'trade')).join('');
   $('#tradeEmpty').hidden = items.length > 0;
+}
+
+async function loadCollection() {
+  if (!me) { $('#collectionGrid').innerHTML = ''; $('#collectionEmpty').hidden = false; return; }
+  const params = new URLSearchParams();
+  if ($('#collectionQ').value.trim()) params.set('q', $('#collectionQ').value.trim());
+  const data = await api('/api/collection?' + params.toString());
+  $('#collectionGrid').innerHTML = data.items.map((t) => tradeItemCard(t, 'collection')).join('');
+  $('#collectionEmpty').hidden = data.items.length > 0;
 }
 
 async function importTradeCsv() {
@@ -269,7 +284,7 @@ async function importTradeCsv() {
     const csv = await file.text();
     const data = await api('/api/trade/import', { method: 'POST', body: JSON.stringify({ csv }) });
     $('#tradeImportResult').textContent =
-      `${data.imported} carte(s) importée(s) : ${data.trade} à échanger, ${data.want} recherchée(s). ${data.skipped} ligne(s) ignorée(s).`;
+      `${data.imported} carte(s) importée(s) : ${data.trade} dans votre Collection, ${data.want} recherchée(s). ${data.skipped} ligne(s) ignorée(s). Les cartes de la Collection ne sont proposées en échange que si vous les sélectionnez.${data.offered ? ` ${data.offered} carte(s) restent proposée(s) en échange.` : ''}`;
     flash(`Import terminé : ${data.imported} carte(s) importée(s).`, 'ok');
     await loadTrade();
   } catch (e) {
@@ -285,6 +300,8 @@ function initTrade() {
   $('#tradeSearchBtn').addEventListener('click', loadTrade);
   $('#tradeQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadTrade(); });
   $('#tradeKind').addEventListener('change', loadTrade);
+  $('#collectionSearchBtn').addEventListener('click', loadCollection);
+  $('#collectionQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadCollection(); });
   $('#tradeManualForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -602,7 +619,7 @@ document.addEventListener('click', async (e) => {
   if (nav) {
     e.preventDefault();
     const view = nav.dataset.nav;
-    if ((view === 'publish' || view === 'messages' || view === 'admin') && !me) {
+    if ((view === 'publish' || view === 'messages' || view === 'admin' || view === 'collection') && !me) {
       flash('Connectez-vous d’abord.', 'danger');
       showView('account');
       return;
@@ -611,6 +628,7 @@ document.addEventListener('click', async (e) => {
     if (view === 'publish') await loadMyListings();
     if (view === 'admin') await loadAdmin();
     if (view === 'trade') await loadTrade();
+    if (view === 'collection') await loadCollection();
     showView(view);
     return;
   }
@@ -630,7 +648,21 @@ document.addEventListener('click', async (e) => {
     try {
       await api(`/api/trade/${delTrade.dataset.deleteTrade}`, { method: 'DELETE' });
       flash('Carte supprimée de l’échange.', 'ok');
-      await loadTrade();
+      if (document.getElementById('view-collection').classList.contains('active')) await loadCollection();
+      else await loadTrade();
+    } catch (err) { flash(err.message, 'danger'); }
+    return;
+  }
+  const offerTrade = e.target.closest('[data-offer-trade]');
+  if (offerTrade) {
+    try {
+      await api(`/api/trade/${offerTrade.dataset.offerTrade}/offer`, {
+        method: 'POST',
+        body: JSON.stringify({ offered: Number(offerTrade.dataset.offered) }),
+      });
+      flash(offerTrade.dataset.offered === '1' ? 'Carte proposée en échange.' : 'Carte retirée de l’échange.', 'ok');
+      if (document.getElementById('view-collection').classList.contains('active')) await loadCollection();
+      else await loadTrade();
     } catch (err) { flash(err.message, 'danger'); }
     return;
   }

@@ -174,6 +174,14 @@ async function initDb() {
       console.error('Migration des conversations : violations de clés étrangères :', fkCheck.rows);
     }
   }
+
+  // Migration : drapeau « offered » sur trade_items (carte proposée en
+  // échange ou seulement dans la Collection du joueur). Additif uniquement :
+  // les lignes existantes restent proposées (DEFAULT 1). Idempotente.
+  const tradeCols = await db.execute('PRAGMA table_info(trade_items)');
+  if (!tradeCols.rows.map((r) => r.name).includes('offered')) {
+    await db.execute('ALTER TABLE trade_items ADD COLUMN offered INTEGER NOT NULL DEFAULT 1');
+  }
 }
 
 const nowIso = () => new Date().toISOString();
@@ -806,6 +814,7 @@ function tradeItemView(r, priceRow) {
     scryfall_id: r.scryfall_id,
     binder_name: r.binder_name,
     kind: r.kind,
+    offered: !!r.offered,
     created_at: r.created_at,
     ...marketValue(!!r.foil, priceRow),
   };
@@ -823,6 +832,11 @@ async function tradeViews(rows) {
 const TRADE_SELECT = `
   SELECT t.*, u.username AS seller
   FROM trade_items t JOIN users u ON u.id = t.user_id`;
+
+// Une carte n'est visible publiquement que si elle est recherchée ou
+// explicitement proposée en échange ; les cartes de Collection non
+// proposées restent privées.
+const PUBLIC_TRADE_WHERE = `(t.kind = 'want' OR (t.kind = 'trade' AND t.offered = 1))`;
 
 // Analyseur CSV écrit à la main (champs entre guillemets, virgules et
 // guillemets doublés "" gérés ; fins de ligne LF, CRLF ou CR).
@@ -857,10 +871,16 @@ function parseCsv(text) {
 
 const MAX_IMPORT_ROWS = 5000;
 
+// Clé d'identité d'une carte proposée en échange (pour retrouver les
+// choix au réimport) : l'édition + le numéro distinguent les impressions,
+// le foil distingue les versions.
+const offerKey = (scryfallId, setCode, collectorNumber, foil) =>
+  `${scryfallId || ''}|${setCode || ''}|${collectorNumber || ''}|${foil ? 1 : 0}`;
+
 api.get('/trade', asyncHandler(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const kind = String(req.query.kind || '').trim();
-  const where = [];
+  const where = [PUBLIC_TRADE_WHERE];
   const args = [];
   if (q) {
     where.push('(t.name LIKE ? OR t.set_name LIKE ? OR u.username LIKE ?)');
@@ -885,6 +905,7 @@ api.get('/trade/binders', asyncHandler(async (req, res) => {
                  SUM(CASE WHEN t.kind = 'want' THEN 1 ELSE 0 END) AS want_count,
                  COUNT(*) AS total
           FROM trade_items t JOIN users u ON u.id = t.user_id
+          WHERE ${PUBLIC_TRADE_WHERE}
           GROUP BY u.id, u.username ORDER BY total DESC`,
     args: [],
   });
@@ -905,10 +926,29 @@ api.get('/trade/user/:userId', asyncHandler(async (req, res) => {
   const user = await db.execute({ sql: 'SELECT id, username FROM users WHERE id = ?', args: [userId] });
   if (!user.rows[0]) return res.status(404).json({ error: 'Utilisateur introuvable.' });
   const rows = await db.execute({
-    sql: `${TRADE_SELECT} WHERE t.user_id = ? ORDER BY t.kind ASC, t.created_at DESC LIMIT 500`,
+    sql: `${TRADE_SELECT} WHERE t.user_id = ? AND ${PUBLIC_TRADE_WHERE} ORDER BY t.kind ASC, t.created_at DESC LIMIT 500`,
     args: [userId],
   });
   res.json({ user: { id: user.rows[0].id, username: user.rows[0].username }, items: await tradeViews(rows.rows) });
+}));
+
+// Collection privée du joueur connecté : toutes ses cartes « À échanger »
+// (proposées ou non), avec leur drapeau offered, leurs images et leurs
+// valeurs de marché. Jamais les articles d'un autre joueur.
+api.get('/collection', requireAuth, asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const where = ['t.user_id = ?', "t.kind = 'trade'"];
+  const args = [req.user.id];
+  if (q) {
+    where.push('(t.name LIKE ? OR t.set_name LIKE ?)');
+    const like = `%${q}%`;
+    args.push(like, like);
+  }
+  const rows = await db.execute({
+    sql: `${TRADE_SELECT} WHERE ${where.join(' AND ')} ORDER BY t.created_at DESC LIMIT 5000`,
+    args,
+  });
+  res.json({ items: await tradeViews(rows.rows) });
 }));
 
 api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
@@ -940,6 +980,7 @@ api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (re
   let trade = 0;
   let want = 0;
   let skipped = 0;
+  let offered = 0;
   const items = [];
   for (let n = 1; n < rows.length; n++) {
     const r = rows[n];
@@ -974,18 +1015,32 @@ api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (re
     else want++;
     imported++;
   }
-  // L'import remplace la collection d'échange actuelle (réimport = mise à jour).
+  // Préserver les choix d'échange au réimport : les cartes déjà proposées
+  // le restent (les classeurs vont dans la Collection, non proposés).
+  const offeredBefore = await db.execute({
+    sql: `SELECT scryfall_id, set_code, collector_number, foil FROM trade_items
+          WHERE user_id = ? AND kind = 'trade' AND offered = 1`,
+    args: [req.user.id],
+  });
+  const offeredKeys = new Set(offeredBefore.rows.map((r) =>
+    offerKey(r.scryfall_id, r.set_code, r.collector_number, r.foil)));
+  for (const it of items) {
+    it.offered = it.kind === 'want' ? 1
+      : (offeredKeys.has(offerKey(it.scryfall_id, it.set_code, it.collector_number, it.foil)) ? 1 : 0);
+    if (it.kind === 'trade' && it.offered === 1) offered++;
+  }
+  // L'import remplace la collection actuelle (réimport = mise à jour).
   await db.execute({ sql: 'DELETE FROM trade_items WHERE user_id = ?', args: [req.user.id] });
   for (const it of items) {
     await db.execute({
-      sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, nowIso()],
+      sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, it.offered, nowIso()],
     });
   }
   // Valeurs de marché : résolution en arrière-plan, sans bloquer la réponse.
   ensurePrices(items.map((it) => it.scryfall_id));
-  res.json({ imported, trade, want, skipped });
+  res.json({ imported, trade, want, skipped, offered });
 }));
 
 api.post('/trade', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
@@ -1003,12 +1058,34 @@ api.post('/trade', requireAuth, requireNotBlocked, asyncHandler(async (req, res)
   if (quantity > 999) quantity = 999;
   if (name.length < 2 || name.length > 120) return res.status(400).json({ error: 'Le nom de la carte est requis (2 à 120 caractères).' });
   const r = await db.execute({
-    sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+    sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 1, ?)`,
     args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, binderName, kind, nowIso()],
   });
   const rows = await db.execute({ sql: `${TRADE_SELECT} WHERE t.id = ?`, args: [Number(r.lastInsertRowid)] });
   res.status(201).json({ item: tradeItemView(rows.rows[0]) });
+}));
+
+// Proposer ou retirer une carte de l'échange (propriétaire ou admin).
+api.post('/trade/:id/offer', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
+  const id = paramId(req);
+  if (id === null) return res.status(400).json({ error: 'Article invalide.' });
+  const rows = await db.execute({ sql: 'SELECT * FROM trade_items WHERE id = ?', args: [id] });
+  const item = rows.rows[0];
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  if (item.user_id !== req.user.id && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Vous ne pouvez modifier que vos propres articles d’échange.' });
+  }
+  if (item.kind !== 'trade') {
+    return res.status(400).json({ error: 'Seules les cartes « À échanger » peuvent être proposées ou retirées.' });
+  }
+  const raw = req.body?.offered;
+  const offered = raw === 1 || raw === true || raw === '1' ? 1
+    : raw === 0 || raw === false || raw === '0' ? 0 : null;
+  if (offered === null) return res.status(400).json({ error: 'Valeur « offered » invalide.' });
+  await db.execute({ sql: 'UPDATE trade_items SET offered = ? WHERE id = ?', args: [offered, id] });
+  const updated = await db.execute({ sql: `${TRADE_SELECT} WHERE t.id = ?`, args: [id] });
+  res.json({ item: (await tradeViews(updated.rows))[0] });
 }));
 
 api.delete('/trade/:id', requireAuth, asyncHandler(async (req, res) => {
@@ -1041,6 +1118,9 @@ api.post('/trade/:id/contact', requireAuth, requireNotBlocked, asyncHandler(asyn
   const seller = await db.execute({ sql: 'SELECT * FROM users WHERE id = ?', args: [item.user_id] });
   if (seller.rows[0]?.is_blocked) {
     return res.status(403).json({ error: 'Cet utilisateur est bloqué et ne peut pas être contacté.' });
+  }
+  if (item.kind === 'trade' && !item.offered) {
+    return res.status(403).json({ error: 'Cette carte n’est plus proposée en échange.' });
   }
   const existing = await db.execute({
     sql: 'SELECT id FROM conversations WHERE trade_item_id = ? AND buyer_id = ?',
