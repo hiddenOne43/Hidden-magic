@@ -38,6 +38,11 @@ function money(cents) {
   return (Number(cents) / 100).toFixed(2).replace('.', ',') + ' $';
 }
 
+// Montant en dollars (valeur de marché), format français.
+function moneyCad(n) {
+  return Number(n).toFixed(2).replace('.', ',') + ' $';
+}
+
 function showView(name) {
   $$('.view').forEach((v) => v.classList.remove('active'));
   const el = document.getElementById('view-' + name);
@@ -169,6 +174,7 @@ function tradeItemCard(t) {
         ${t.foil ? '<span class="chip">Foil</span>' : ''}
         <span class="chip">× ${t.quantity}</span>
       </div>
+      ${t.market_cad_approx != null ? `<div class="market">Valeur marché : ≈ ${moneyCad(t.market_cad_approx)} CA</div>` : ''}
       ${t.binder_name ? `<div class="metaline">Classeur : ${escapeHtml(t.binder_name)}</div>` : ''}
       <div class="metaline">Joueur : ${escapeHtml(t.seller)}</div>
       <div class="card-actions">

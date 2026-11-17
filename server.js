@@ -19,6 +19,15 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const MAX_PHOTO_CHARS = 700_000; // ~500 Ko d'image encodée en base64
 const SESSION_DAYS = 30;
 
+// Valeur de marché (prix Scryfall) : taux de change approximatif USD -> CAD.
+const USD_TO_CAD = 1.40; // À ajuster si le taux s'éloigne durablement de 1,40.
+const PRICE_TTL_MS = 24 * 60 * 60 * 1000; // Un prix est frais pendant 24 h.
+const PRICE_FETCH_DELAY_MS = 200; // ~5 appels/s, sous la limite demandée par Scryfall (~10/s).
+// Base de l'API Scryfall. La variable SCRYFALL_API_BASE ne sert qu'aux tests
+// locaux (pointer vers un faux serveur) ; en production, l'API réelle.
+const SCRYFALL_API_BASE = (process.env.SCRYFALL_API_BASE || 'https://api.scryfall.com').replace(/\/$/, '');
+const SCRYFALL_USER_AGENT = 'Hidden-Magic/1.0';
+
 const db = (() => {
   const url = (process.env.TURSO_DATABASE_URL || '').trim();
   if (url) {
@@ -119,6 +128,13 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_trade_user ON trade_items(user_id);
     CREATE INDEX IF NOT EXISTS idx_trade_kind ON trade_items(kind);
     CREATE INDEX IF NOT EXISTS idx_trade_name ON trade_items(name);
+    CREATE TABLE IF NOT EXISTS card_prices (
+      scryfall_id TEXT PRIMARY KEY,
+      usd REAL,
+      usd_foil REAL,
+      eur REAL,
+      fetched_at INTEGER NOT NULL
+    );
   `);
 
   // Migration : une conversation peut porter sur un article d'échange
@@ -640,7 +656,141 @@ api.post('/conversations/:id/messages', requireAuth, requireNotBlocked, asyncHan
 // ---------------------------------------------------------------------------
 // Échange (collection à échanger + cartes recherchées, import ManaBox)
 // ---------------------------------------------------------------------------
-function tradeItemView(r) {
+// ---------------------------------------------------------------------------
+// Valeurs de marché (prix Scryfall, cache local de 24 h)
+// ---------------------------------------------------------------------------
+// Les prix viennent de l'API Scryfall (gratuite, sans clé ; prix TCGplayer /
+// Cardmarket). Pour respecter ses limites (~10 appels/s, 50-100 ms entre
+// requêtes), les prix sont récupérés en arrière-plan, une carte à la fois
+// (~200 ms entre appels), et mis en cache 24 h dans card_prices.
+// Les réponses API ne sont jamais bloquées sur Scryfall : elles renvoient
+// les prix déjà en cache (null sinon). La file est dérivée des données :
+// chaque lecture de la liste d'échange ré-enfile les cartes sans prix frais,
+// donc le système se répare seul après un redémarrage (le service gratuit
+// Render s'endort après 15 min d'inactivité). Les minuteurs sont en unref()
+// pour ne pas retenir le processus (tests).
+async function fetchJson(url) {
+  if (typeof globalThis.fetch === 'function') {
+    const res = await globalThis.fetch(url, {
+      headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Scryfall ${res.status}`);
+    return res.json();
+  }
+  // Repli Node < 18 (sans fetch global) : module https.
+  const https = require('node:https');
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' } }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(`Scryfall ${res.statusCode}`));
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Prix d'une carte Scryfall (les prix sont des chaînes ou null côté Scryfall).
+async function fetchCardPrice(scryfallId) {
+  const card = await fetchJson(`${SCRYFALL_API_BASE}/cards/${encodeURIComponent(scryfallId)}`);
+  const p = card?.prices || {};
+  const num = (v) => {
+    const n = typeof v === 'string' ? parseFloat(v) : v;
+    return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  };
+  return { usd: num(p.usd), usd_foil: num(p.usd_foil), eur: num(p.eur) };
+}
+
+async function loadCachedPrices(ids) {
+  const map = new Map();
+  const list = [...new Set(ids.filter(Boolean))];
+  if (!list.length) return map;
+  const placeholders = list.map(() => '?').join(',');
+  const rows = await db.execute({
+    sql: `SELECT * FROM card_prices WHERE scryfall_id IN (${placeholders})`,
+    args: list,
+  });
+  for (const r of rows.rows) map.set(r.scryfall_id, r);
+  return map;
+}
+
+function isPriceFresh(row) {
+  return !!row && typeof row.fetched_at === 'number' && (Date.now() - row.fetched_at) < PRICE_TTL_MS;
+}
+
+const priceQueue = new Set();
+const priceInFlight = new Set(); // récupérations en cours (évite les doublons)
+let priceWorkerActive = false;
+
+function enqueuePrices(ids, cache) {
+  let added = false;
+  for (const id of new Set(ids.filter(Boolean))) {
+    if (!isPriceFresh(cache.get(id)) && !priceQueue.has(id) && !priceInFlight.has(id)) {
+      priceQueue.add(id);
+      added = true;
+    }
+  }
+  if (added) kickPriceWorker();
+}
+
+// Récupère un prix et l'enregistre. En cas d'échec, on enregistre quand même
+// fetched_at = maintenant avec des valeurs nulles : la carte ne sera pas
+// réessayée à chaque chargement, seulement après 24 h.
+async function processPrice(id) {
+  let prices = { usd: null, usd_foil: null, eur: null };
+  try {
+    prices = await fetchCardPrice(id);
+  } catch (e) {
+    console.error(`Prix Scryfall introuvable pour ${id} :`, e.message);
+  }
+  try {
+    await db.execute({
+      sql: `INSERT OR REPLACE INTO card_prices (scryfall_id, usd, usd_foil, eur, fetched_at)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [id, prices.usd, prices.usd_foil, prices.eur, Date.now()],
+    });
+  } catch (e) {
+    console.error(`Impossible d'enregistrer le prix de ${id} :`, e.message);
+  }
+}
+
+function kickPriceWorker() {
+  if (priceWorkerActive) return;
+  priceWorkerActive = true;
+  const step = () => {
+    const next = priceQueue.values().next();
+    if (next.done) { priceWorkerActive = false; return; }
+    const id = next.value;
+    priceQueue.delete(id);
+    priceInFlight.add(id);
+    processPrice(id).finally(() => {
+      priceInFlight.delete(id);
+      const t = setTimeout(step, PRICE_FETCH_DELAY_MS);
+      if (typeof t.unref === 'function') t.unref();
+    });
+  };
+  const t = setTimeout(step, 0);
+  if (typeof t.unref === 'function') t.unref();
+}
+
+// Enfile les prix manquants ou périmés (sans bloquer l'appelant).
+function ensurePrices(ids) {
+  loadCachedPrices(ids)
+    .then((cache) => enqueuePrices(ids, cache))
+    .catch((e) => console.error('ensurePrices :', e.message));
+}
+
+// Valeur de marché d'une carte : prix foil si foil (repli sur le prix
+// normal), sinon prix normal. Conversion CAD approximative.
+function marketValue(foil, priceRow) {
+  if (!priceRow) return { market_usd: null, market_cad_approx: null };
+  const usd = foil ? (priceRow.usd_foil ?? priceRow.usd) : priceRow.usd;
+  if (typeof usd !== 'number' || !Number.isFinite(usd)) return { market_usd: null, market_cad_approx: null };
+  return { market_usd: usd, market_cad_approx: Math.round(usd * USD_TO_CAD * 100) / 100 };
+}
+
+function tradeItemView(r, priceRow) {
   return {
     id: r.id,
     user_id: r.user_id,
@@ -657,7 +807,17 @@ function tradeItemView(r) {
     binder_name: r.binder_name,
     kind: r.kind,
     created_at: r.created_at,
+    ...marketValue(!!r.foil, priceRow),
   };
+}
+
+// Vues d'articles d'échange avec leurs valeurs de marché (cache uniquement).
+// Ré-enfile les cartes sans prix frais pour que la file se répare seule.
+async function tradeViews(rows) {
+  const ids = rows.map((r) => r.scryfall_id);
+  const cache = await loadCachedPrices(ids);
+  enqueuePrices(ids, cache);
+  return rows.map((r) => tradeItemView(r, cache.get(r.scryfall_id)));
 }
 
 const TRADE_SELECT = `
@@ -715,7 +875,7 @@ api.get('/trade', asyncHandler(async (req, res) => {
     sql: `${TRADE_SELECT}${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY t.created_at DESC LIMIT 100`,
     args,
   });
-  res.json({ items: rows.rows.map(tradeItemView) });
+  res.json({ items: await tradeViews(rows.rows) });
 }));
 
 api.get('/trade/binders', asyncHandler(async (req, res) => {
@@ -748,7 +908,7 @@ api.get('/trade/user/:userId', asyncHandler(async (req, res) => {
     sql: `${TRADE_SELECT} WHERE t.user_id = ? ORDER BY t.kind ASC, t.created_at DESC LIMIT 500`,
     args: [userId],
   });
-  res.json({ user: { id: user.rows[0].id, username: user.rows[0].username }, items: rows.rows.map(tradeItemView) });
+  res.json({ user: { id: user.rows[0].id, username: user.rows[0].username }, items: await tradeViews(rows.rows) });
 }));
 
 api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
@@ -823,6 +983,8 @@ api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (re
       args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, nowIso()],
     });
   }
+  // Valeurs de marché : résolution en arrière-plan, sans bloquer la réponse.
+  ensurePrices(items.map((it) => it.scryfall_id));
   res.json({ imported, trade, want, skipped });
 }));
 
