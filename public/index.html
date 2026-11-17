@@ -11,16 +11,27 @@
 </head>
 <body>
 <header class="topbar">
+  <button id="menuBtn" class="menu-btn" aria-label="Ouvrir le menu" aria-expanded="false" aria-controls="sidebar">☰</button>
   <a class="brand" href="#" data-nav="market">Hidden Magic<small>Rouyn-Noranda · MTG</small></a>
+</header>
+
+<aside id="sidebar" aria-label="Menu de navigation">
+  <div class="sidebar-head">
+    <span class="sidebar-title">Menu</span>
+    <button id="sidebarClose" class="menu-btn" aria-label="Fermer le menu">✕</button>
+  </div>
   <nav id="mainnav">
     <button class="navbtn active" data-nav="market">Marché</button>
     <button class="navbtn" data-nav="trade">Échange</button>
-    <button class="navbtn" data-nav="publish" data-auth>Publier</button>
-    <button class="navbtn" data-nav="messages" data-auth>Messages</button>
-    <button class="navbtn" data-nav="admin" data-admin>Admin <span class="badge-count" id="adminBadge" hidden>0</span></button>
-    <button class="navbtn" data-nav="account" id="accountBtn">Connexion</button>
+    <button class="navbtn" data-nav="publish" data-auth style="display:none">Publier</button>
+    <button class="navbtn" data-nav="messages" data-auth style="display:none">Messages</button>
+    <button class="navbtn" data-nav="admin" data-admin style="display:none">Admin <span class="badge-count" id="adminBadge" hidden>0</span></button>
   </nav>
-</header>
+  <div class="sidebar-foot">
+    <button class="navbtn" data-nav="account" id="accountBtn">Connexion</button>
+  </div>
+</aside>
+<div id="sidebarOverlay"></div>
 
 <main>
   <div id="blockedBanner" class="notice danger" hidden></div>

@@ -48,7 +48,32 @@ function showView(name) {
   const el = document.getElementById('view-' + name);
   if (el) el.classList.add('active');
   $$('#mainnav .navbtn').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
+  closeSidebar();
   window.scrollTo({ top: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Barre latérale (navigation)
+// ---------------------------------------------------------------------------
+function openSidebar() {
+  document.body.classList.add('sidebar-open');
+  const btn = $('#menuBtn');
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+}
+function closeSidebar() {
+  document.body.classList.remove('sidebar-open');
+  const btn = $('#menuBtn');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+function toggleSidebar() {
+  if (document.body.classList.contains('sidebar-open')) closeSidebar();
+  else openSidebar();
+}
+function initSidebar() {
+  $('#menuBtn').addEventListener('click', toggleSidebar);
+  $('#sidebarClose').addEventListener('click', closeSidebar);
+  $('#sidebarOverlay').addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSidebar(); });
 }
 
 async function refreshMe() {
@@ -687,6 +712,7 @@ $('#messageForm').addEventListener('submit', sendMessage);
 // Démarrage
 // ---------------------------------------------------------------------------
 (async () => {
+  initSidebar();
   initAuth();
   await initPublish();
   initTrade();
