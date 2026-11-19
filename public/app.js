@@ -24,11 +24,33 @@ function getRegionFilter() {
 function setRegionFilter(v) {
   localStorage.setItem(REGION_KEY, v);
 }
+// Libellés du nom du site selon la région affichée : le nom du site
+// (titre de l'onglet, marque, titre du marché, pied de page) suit la
+// région choisie dans le sélecteur.
+const REGION_LABELS = {
+  'Rouyn-Noranda': { short: 'Rouyn-Noranda', long: 'Rouyn-Noranda' },
+  "Val-d'Or": { short: "Val-d'Or", long: "Val-d'Or" },
+  all: { short: "Rouyn-Noranda · Val-d'Or", long: "Rouyn-Noranda et Val-d'Or" },
+};
+function applyRegionName() {
+  const r = REGION_LABELS[getRegionFilter()] || REGION_LABELS[DEFAULT_REGION];
+  document.title = `Hidden Magic — Marché MTG de ${r.long}`;
+  const brand = $('#brandRegion');
+  if (brand) brand.textContent = `${r.short} · MTG`;
+  const hero = $('#marketHeroTitle');
+  if (hero) hero.textContent = `Le marché des mages de ${r.long}`;
+  const foot = $('#siteFooter');
+  if (foot) foot.innerHTML = `Hidden Magic — marché communautaire de ${r.long}.<br>Aucun paiement en ligne : les échanges se concluent en personne.`;
+  const meta = document.querySelector('meta[name="description"]');
+  if (meta) meta.setAttribute('content', `Hidden Magic : achetez et vendez vos cartes Magic: The Gathering entre joueurs de ${r.long}. Annonces, messagerie privée, modération. Aucun paiement en ligne.`);
+}
 function initRegion() {
   const sel = $('#regionSelect');
   sel.value = getRegionFilter();
+  applyRegionName();
   sel.addEventListener('change', async () => {
     setRegionFilter(sel.value);
+    applyRegionName();
     await loadMarket();
     if (document.getElementById('view-trade').classList.contains('active')) await loadTrade();
   });
