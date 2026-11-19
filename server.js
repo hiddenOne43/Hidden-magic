@@ -182,10 +182,32 @@ async function initDb() {
   if (!tradeCols.rows.map((r) => r.name).includes('offered')) {
     await db.execute('ALTER TABLE trade_items ADD COLUMN offered INTEGER NOT NULL DEFAULT 1');
   }
+
+  // Migration : région sur users, listings et trade_items. Additive
+  // uniquement : les comptes, annonces et cartes existants deviennent
+  // « Rouyn-Noranda » (DEFAULT). Idempotente.
+  for (const table of ['users', 'listings', 'trade_items']) {
+    const cols = await db.execute(`PRAGMA table_info(${table})`);
+    if (!cols.rows.map((r) => r.name).includes('region')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN region TEXT NOT NULL DEFAULT '${DEFAULT_REGION}'`);
+    }
+  }
 }
 
 const nowIso = () => new Date().toISOString();
 const CONDITIONS = ['Neuf', 'Comme neuf', 'Excellent', 'Bon', 'Usé'];
+
+// Régions desservies par le site : un seul site, avec un filtre par région.
+// La région est stockée sur le compte et estampillée sur les annonces et
+// les cartes au moment de leur création (les éléments existants gardent
+// leur région quand le joueur change de région).
+const REGIONS = ['Rouyn-Noranda', "Val-d'Or"];
+const DEFAULT_REGION = 'Rouyn-Noranda';
+// Région valide telle quelle, sinon null (valeur invalide ou absente).
+function parseRegion(v) {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return REGIONS.includes(s) ? s : null;
+}
 
 // ---------------------------------------------------------------------------
 // Mots de passe (scrypt + sel aléatoire, sans dépendance native)
@@ -261,6 +283,7 @@ function publicUser(u) {
     id: u.id,
     username: u.username,
     email: u.email,
+    region: u.region || DEFAULT_REGION,
     is_admin: !!u.is_admin,
     is_blocked: !!u.is_blocked,
     created_at: u.created_at,
@@ -347,12 +370,13 @@ api.post('/auth/register', asyncHandler(async (req, res) => {
   if (password.length < 8) {
     return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caractères.' });
   }
+  const region = parseRegion(req.body?.region) || DEFAULT_REGION;
   const count = await db.execute('SELECT COUNT(*) AS n FROM users');
   const isFirst = Number(count.rows[0].n) === 0;
   try {
     const r = await db.execute({
-      sql: 'INSERT INTO users (username, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?)',
-      args: [username, email, hashPassword(password), isFirst ? 1 : 0, nowIso()],
+      sql: 'INSERT INTO users (username, email, password_hash, is_admin, region, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      args: [username, email, hashPassword(password), isFirst ? 1 : 0, region, nowIso()],
     });
     const token = await createSession(Number(r.lastInsertRowid));
     res.cookie('hm_session', token, sessionCookieOptions());
@@ -395,6 +419,18 @@ api.get('/auth/me', asyncHandler(async (req, res) => {
   res.json({ user: publicUser(user) });
 }));
 
+// Changer sa région. Elle s'applique aux futures publications et imports ;
+// les annonces et les cartes déjà publiées gardent leur région.
+api.post('/account/region', requireAuth, asyncHandler(async (req, res) => {
+  const region = parseRegion(req.body?.region);
+  if (!region) {
+    return res.status(400).json({ error: 'Région invalide. Choisissez Rouyn-Noranda ou Val-d’Or.' });
+  }
+  await db.execute({ sql: 'UPDATE users SET region = ? WHERE id = ?', args: [region, req.user.id] });
+  const rows = await db.execute({ sql: 'SELECT * FROM users WHERE id = ?', args: [req.user.id] });
+  res.json({ user: publicUser(rows.rows[0]) });
+}));
+
 // ---------------------------------------------------------------------------
 // Annonces
 // ---------------------------------------------------------------------------
@@ -411,6 +447,7 @@ function listingView(r) {
     language: r.language,
     foil: !!r.foil,
     photo: r.photo || null,
+    region: r.region || DEFAULT_REGION,
     status: r.status,
     created_at: r.created_at,
     report_count: r.report_count != null ? Number(r.report_count) : undefined,
@@ -425,6 +462,8 @@ api.get('/listings', asyncHandler(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const condition = String(req.query.condition || '').trim();
   const mine = req.query.mine === '1';
+  const regionParam = String(req.query.region || 'all').trim();
+  const region = regionParam === 'all' ? null : parseRegion(regionParam);
   const where = ["l.status = 'active'"];
   const args = [];
   if (q) {
@@ -435,6 +474,13 @@ api.get('/listings', asyncHandler(async (req, res) => {
   if (condition && CONDITIONS.includes(condition)) {
     where.push('l.condition = ?');
     args.push(condition);
+  }
+  // Filtre par région du marché public. « Mes annonces » (mine=1) n'est pas
+  // filtré : c'est la vue de gestion de ses propres annonces. Une région
+  // invalide vaut « all » (comme un état invalide est ignoré).
+  if (region && !mine) {
+    where.push('l.region = ?');
+    args.push(region);
   }
   if (mine) {
     const user = await loadUser(req);
@@ -479,9 +525,9 @@ api.post('/listings', requireAuth, requireNotBlocked, asyncHandler(async (req, r
     }
   }
   const r = await db.execute({
-    sql: `INSERT INTO listings (user_id, title, edition, condition, price_cents, language, foil, photo, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [req.user.id, title, edition, condition, Math.round(price * 100), language, foil, photo, nowIso()],
+    sql: `INSERT INTO listings (user_id, title, edition, condition, price_cents, language, foil, photo, region, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [req.user.id, title, edition, condition, Math.round(price * 100), language, foil, photo, req.user.region || DEFAULT_REGION, nowIso()],
   });
   const rows = await db.execute({ sql: `${LISTING_SELECT} WHERE l.id = ?`, args: [Number(r.lastInsertRowid)] });
   res.status(201).json({ listing: listingView(rows.rows[0]) });
@@ -815,6 +861,7 @@ function tradeItemView(r, priceRow) {
     binder_name: r.binder_name,
     kind: r.kind,
     offered: !!r.offered,
+    region: r.region || DEFAULT_REGION,
     created_at: r.created_at,
     ...marketValue(!!r.foil, priceRow),
   };
@@ -880,6 +927,8 @@ const offerKey = (scryfallId, setCode, collectorNumber, foil) =>
 api.get('/trade', asyncHandler(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const kind = String(req.query.kind || '').trim();
+  const regionParam = String(req.query.region || 'all').trim();
+  const region = regionParam === 'all' ? null : parseRegion(regionParam);
   const where = [PUBLIC_TRADE_WHERE];
   const args = [];
   if (q) {
@@ -891,6 +940,10 @@ api.get('/trade', asyncHandler(async (req, res) => {
     where.push('t.kind = ?');
     args.push(kind);
   }
+  if (region) {
+    where.push('t.region = ?');
+    args.push(region);
+  }
   const rows = await db.execute({
     sql: `${TRADE_SELECT}${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY t.created_at DESC LIMIT 100`,
     args,
@@ -899,20 +952,29 @@ api.get('/trade', asyncHandler(async (req, res) => {
 }));
 
 api.get('/trade/binders', asyncHandler(async (req, res) => {
+  const regionParam = String(req.query.region || 'all').trim();
+  const region = regionParam === 'all' ? null : parseRegion(regionParam);
+  const where = [PUBLIC_TRADE_WHERE];
+  const args = [];
+  if (region) {
+    where.push('t.region = ?');
+    args.push(region);
+  }
   const rows = await db.execute({
-    sql: `SELECT u.id AS user_id, u.username,
+    sql: `SELECT u.id AS user_id, u.username, u.region AS region,
                  SUM(CASE WHEN t.kind = 'trade' THEN 1 ELSE 0 END) AS trade_count,
                  SUM(CASE WHEN t.kind = 'want' THEN 1 ELSE 0 END) AS want_count,
                  COUNT(*) AS total
           FROM trade_items t JOIN users u ON u.id = t.user_id
-          WHERE ${PUBLIC_TRADE_WHERE}
+          WHERE ${where.join(' AND ')}
           GROUP BY u.id, u.username ORDER BY total DESC`,
-    args: [],
+    args,
   });
   res.json({
     binders: rows.rows.map((b) => ({
       user_id: b.user_id,
       username: b.username,
+      region: b.region || DEFAULT_REGION,
       trade_count: Number(b.trade_count),
       want_count: Number(b.want_count),
       total: Number(b.total),
@@ -923,13 +985,15 @@ api.get('/trade/binders', asyncHandler(async (req, res) => {
 api.get('/trade/user/:userId', asyncHandler(async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId)) return res.status(400).json({ error: 'Utilisateur invalide.' });
-  const user = await db.execute({ sql: 'SELECT id, username FROM users WHERE id = ?', args: [userId] });
+  const user = await db.execute({ sql: 'SELECT id, username, region FROM users WHERE id = ?', args: [userId] });
   if (!user.rows[0]) return res.status(404).json({ error: 'Utilisateur introuvable.' });
   const rows = await db.execute({
     sql: `${TRADE_SELECT} WHERE t.user_id = ? AND ${PUBLIC_TRADE_WHERE} ORDER BY t.kind ASC, t.created_at DESC LIMIT 500`,
     args: [userId],
   });
-  res.json({ user: { id: user.rows[0].id, username: user.rows[0].username }, items: await tradeViews(rows.rows) });
+  // Non filtré par région (contrairement à /api/trade) : le client applique
+  // le filtre choisi à l'affichage du classeur.
+  res.json({ user: { id: user.rows[0].id, username: user.rows[0].username, region: user.rows[0].region || DEFAULT_REGION }, items: await tradeViews(rows.rows) });
 }));
 
 // Collection privée du joueur connecté : toutes ses cartes « À échanger »
@@ -1030,12 +1094,14 @@ api.post('/trade/import', requireAuth, requireNotBlocked, asyncHandler(async (re
     if (it.kind === 'trade' && it.offered === 1) offered++;
   }
   // L'import remplace la collection actuelle (réimport = mise à jour).
+  // Les lignes importées prennent la région du compte.
+  const importRegion = req.user.region || DEFAULT_REGION;
   await db.execute({ sql: 'DELETE FROM trade_items WHERE user_id = ?', args: [req.user.id] });
   for (const it of items) {
     await db.execute({
-      sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, it.offered, nowIso()],
+      sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, region, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [req.user.id, it.name, it.set_code, it.set_name, it.collector_number, it.foil, it.condition, it.language, it.quantity, it.scryfall_id, it.binder_name, it.kind, it.offered, importRegion, nowIso()],
     });
   }
   // Valeurs de marché : résolution en arrière-plan, sans bloquer la réponse.
@@ -1058,9 +1124,9 @@ api.post('/trade', requireAuth, requireNotBlocked, asyncHandler(async (req, res)
   if (quantity > 999) quantity = 999;
   if (name.length < 2 || name.length > 120) return res.status(400).json({ error: 'Le nom de la carte est requis (2 à 120 caractères).' });
   const r = await db.execute({
-    sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 1, ?)`,
-    args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, binderName, kind, nowIso()],
+    sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, region, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 1, ?, ?)`,
+    args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, binderName, kind, req.user.region || DEFAULT_REGION, nowIso()],
   });
   const rows = await db.execute({ sql: `${TRADE_SELECT} WHERE t.id = ?`, args: [Number(r.lastInsertRowid)] });
   res.status(201).json({ item: tradeItemView(rows.rows[0]) });

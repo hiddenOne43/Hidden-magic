@@ -28,6 +28,15 @@
     <button class="navbtn" data-nav="messages" data-auth style="display:none">Messages</button>
     <button class="navbtn" data-nav="admin" data-admin style="display:none">Admin <span class="badge-count" id="adminBadge" hidden>0</span></button>
   </nav>
+  <div class="region-picker">
+    <label for="regionSelect">Ma région</label>
+    <select id="regionSelect" aria-label="Choisir la région affichée">
+      <option value="Rouyn-Noranda">Rouyn-Noranda</option>
+      <option value="Val-d'Or">Val-d'Or</option>
+      <option value="all">Toutes les régions</option>
+    </select>
+    <p class="meta">Seules les cartes de la région choisie s’affichent dans le Marché et l’Échange.</p>
+  </div>
   <div class="sidebar-foot">
     <button class="navbtn" data-nav="account" id="accountBtn">Connexion</button>
   </div>
@@ -70,7 +79,7 @@
     <p class="meta" id="tradeLoginHint">Connectez-vous pour importer votre collection ou ajouter des cartes à échanger.</p>
     <div class="panel" id="tradeImportPanel" hidden>
       <h2>Ma collection à échanger</h2>
-      <p class="meta">Importez votre collection ManaBox : dans ManaBox, onglet Collection → menu en haut à droite → Exporter → CSV. L’import remplace votre collection actuelle sur le site (réimportez pour la mettre à jour). Les classeurs rejoignent votre Collection (ils ne sont proposés en échange que si vous les sélectionnez), les listes deviennent des cartes « Recherché ». Vos choix d’échange sont conservés lors d’un réimport.</p>
+      <p class="meta">Importez votre collection ManaBox : dans ManaBox, onglet Collection → menu en haut à droite → Exporter → CSV. L’import remplace votre collection actuelle sur le site (réimportez pour la mettre à jour). Les classeurs rejoignent votre Collection (ils ne sont proposés en échange que si vous les sélectionnez), les listes deviennent des cartes « Recherché ». Vos choix d’échange sont conservés lors d’un réimport. Les cartes importées prennent la région de votre compte.</p>
       <label for="tradeCsvFile">Fichier CSV ManaBox (.csv)</label>
       <input id="tradeCsvFile" type="file" accept=".csv,text/csv">
       <button class="btn" id="tradeImportBtn" type="button" style="margin-top:.6rem">Importer ma collection ManaBox</button>
@@ -174,6 +183,7 @@
     <div class="panel">
       <h2>Publier une annonce</h2>
       <p class="meta">Votre annonce sera visible immédiatement dans le marché.</p>
+      <p class="meta" id="publishRegionHint"></p>
       <form id="publishForm">
         <label for="fTitle">Nom de la carte *</label>
         <input id="fTitle" required maxlength="120" placeholder="Ex. : Sol Ring">
@@ -277,13 +287,27 @@
         <input id="regEmail" type="email" required autocomplete="email">
         <label for="regPass">Mot de passe (8 caractères minimum)</label>
         <input id="regPass" type="password" required minlength="8" autocomplete="new-password">
+        <label for="regRegion">Région</label>
+        <select id="regRegion">
+          <option value="Rouyn-Noranda">Rouyn-Noranda</option>
+          <option value="Val-d'Or">Val-d'Or</option>
+        </select>
         <button class="btn block" type="submit">Créer mon compte</button>
       </form>
     </div>
     <div class="panel" id="profilePanel" hidden>
       <h2>Mon compte</h2>
       <p id="profileInfo"></p>
-      <button class="btn secondary" id="logoutBtn">Se déconnecter</button>
+      <label for="profileRegion">Ma région</label>
+      <select id="profileRegion">
+        <option value="Rouyn-Noranda">Rouyn-Noranda</option>
+        <option value="Val-d'Or">Val-d'Or</option>
+      </select>
+      <p class="meta">Votre région s’applique à vos futures annonces et à vos futurs imports. Vos annonces et cartes déjà publiées gardent leur région.</p>
+      <button class="btn secondary" id="saveRegionBtn" type="button">Changer de région</button>
+      <div style="margin-top:1rem">
+        <button class="btn secondary" id="logoutBtn">Se déconnecter</button>
+      </div>
     </div>
   </section>
 </main>

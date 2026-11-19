@@ -9,6 +9,31 @@ let currentConvId = null;
 let currentListing = null;
 let photoDataUrl = null;
 
+// ---------------------------------------------------------------------------
+// Région (un seul site, filtre par région)
+// ---------------------------------------------------------------------------
+const REGIONS = ['Rouyn-Noranda', "Val-d'Or"];
+const DEFAULT_REGION = 'Rouyn-Noranda';
+const REGION_KEY = 'hm-region';
+// Région d'affichage choisie : 'Rouyn-Noranda', "Val-d'Or" ou 'all'.
+// Mémorisée en localStorage ; défaut Rouyn-Noranda.
+function getRegionFilter() {
+  const v = localStorage.getItem(REGION_KEY);
+  return v === "Val-d'Or" || v === 'all' || v === 'Rouyn-Noranda' ? v : DEFAULT_REGION;
+}
+function setRegionFilter(v) {
+  localStorage.setItem(REGION_KEY, v);
+}
+function initRegion() {
+  const sel = $('#regionSelect');
+  sel.value = getRegionFilter();
+  sel.addEventListener('change', async () => {
+    setRegionFilter(sel.value);
+    await loadMarket();
+    if (document.getElementById('view-trade').classList.contains('active')) await loadTrade();
+  });
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     credentials: 'same-origin',
@@ -92,8 +117,13 @@ async function refreshMe() {
   if (me) {
     $('#profileInfo').innerHTML =
       `<strong>${escapeHtml(me.username)}</strong> — ${escapeHtml(me.email)}` +
+      ` · Région : ${escapeHtml(me.region || DEFAULT_REGION)}` +
       (me.is_admin ? ' <span class="chip">Administrateur</span>' : '') +
       (me.is_blocked ? ' <span class="chip">Compte bloqué</span>' : '');
+    $('#profileRegion').value = me.region || DEFAULT_REGION;
+    $('#publishRegionHint').textContent = `Cette annonce sera publiée dans la région : ${me.region || DEFAULT_REGION}.`;
+  } else {
+    $('#publishRegionHint').textContent = '';
   }
   const banner = $('#blockedBanner');
   if (me && me.is_blocked) {
@@ -135,6 +165,7 @@ function listingCard(l) {
         <span class="chip">${l.language === 'EN' ? 'Anglais' : 'Français'}</span>
         ${l.foil ? '<span class="chip">Foil</span>' : ''}
         ${sold ? '<span class="chip sold">Vendu</span>' : ''}
+        ${l.region ? `<span class="chip">${escapeHtml(l.region)}</span>` : ''}
       </div>
       <div class="metaline">Vendeur : ${escapeHtml(l.seller)}</div>
       <div class="card-actions">
@@ -154,6 +185,7 @@ async function loadMarket() {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (condition) params.set('condition', condition);
+  params.set('region', getRegionFilter());
   const data = await api('/api/listings?' + params.toString());
   const grid = $('#listingGrid');
   grid.innerHTML = data.listings.map(listingCard).join('');
@@ -218,12 +250,12 @@ function tradeItemCard(t, context = 'trade') {
 }
 
 async function loadBinders() {
-  const data = await api('/api/trade/binders');
+  const data = await api('/api/trade/binders?region=' + encodeURIComponent(getRegionFilter()));
   $('#tradeBinders').innerHTML = data.binders.length
     ? data.binders.map((b) => `
       <button class="conv" data-view-binder="${b.user_id}">
         <strong>${escapeHtml(b.username)}</strong><br>
-        <span class="meta">${b.trade_count} à échanger · ${b.want_count} recherchée${b.want_count > 1 ? 's' : ''}</span>
+        <span class="meta">${b.trade_count} à échanger · ${b.want_count} recherchée${b.want_count > 1 ? 's' : ''} — ${escapeHtml(b.region || '')}</span>
       </button>`).join('')
     : '<p class="meta">Aucun classeur pour le moment.</p>';
 }
@@ -235,29 +267,35 @@ async function loadTrade() {
   await loadBinders();
   const q = $('#tradeQ').value.trim().toLowerCase();
   const kind = $('#tradeKind').value;
+  const region = getRegionFilter();
   let items;
   let binderName = null;
+  let binderRegion = null;
   if (tradeBinderUserId) {
     const data = await api(`/api/trade/user/${tradeBinderUserId}`);
     binderName = data.user.username;
+    binderRegion = data.user.region || null;
     items = data.items;
   } else {
     const params = new URLSearchParams();
     if ($('#tradeQ').value.trim()) params.set('q', $('#tradeQ').value.trim());
     if (kind) params.set('kind', kind);
+    params.set('region', region);
     const data = await api('/api/trade?' + params.toString());
     items = data.items;
   }
   if (tradeBinderUserId) {
-    // Filtres appliqués côté client sur le classeur d'un joueur.
+    // Filtres appliqués côté client sur le classeur d'un joueur
+    // (/api/trade/user/:id n'est pas filtré par région côté serveur).
     items = items.filter((t) =>
       (!kind || t.kind === kind) &&
+      (region === 'all' || t.region === region) &&
       (!q || t.name.toLowerCase().includes(q) || (t.set_name || '').toLowerCase().includes(q) || t.seller.toLowerCase().includes(q)));
   }
   const bar = $('#tradeBinderBar');
   if (tradeBinderUserId) {
     bar.hidden = false;
-    bar.innerHTML = `Classeur de <strong>${escapeHtml(binderName || '')}</strong> — <button class="btn secondary small" data-trade-all>Voir tous les échanges</button>`;
+    bar.innerHTML = `Classeur de <strong>${escapeHtml(binderName || '')}</strong>${binderRegion ? ` — ${escapeHtml(binderRegion)}` : ''} — <button class="btn secondary small" data-trade-all>Voir tous les échanges</button>`;
   } else {
     bar.hidden = true;
   }
@@ -589,6 +627,7 @@ function initAuth() {
           username: $('#regUser').value.trim(),
           email: $('#regEmail').value.trim(),
           password: $('#regPass').value,
+          region: $('#regRegion').value,
         }),
       });
       me = data.user;
@@ -598,6 +637,19 @@ function initAuth() {
       await refreshMe();
       showView('market');
       await loadMarket();
+    } catch (err) {
+      flash(err.message, 'danger');
+    }
+  });
+  $('#saveRegionBtn').addEventListener('click', async () => {
+    try {
+      const data = await api('/api/account/region', {
+        method: 'POST',
+        body: JSON.stringify({ region: $('#profileRegion').value }),
+      });
+      me = data.user;
+      flash(`Votre région est maintenant : ${me.region}. Vos futures annonces et imports utiliseront cette région.`, 'ok');
+      await refreshMe();
     } catch (err) {
       flash(err.message, 'danger');
     }
@@ -745,6 +797,7 @@ $('#messageForm').addEventListener('submit', sendMessage);
 // ---------------------------------------------------------------------------
 (async () => {
   initSidebar();
+  initRegion();
   initAuth();
   await initPublish();
   initTrade();
