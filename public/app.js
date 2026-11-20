@@ -8,6 +8,7 @@ let me = null; // utilisateur courant (null si déconnecté)
 let currentConvId = null;
 let currentListing = null;
 let photoDataUrl = null;
+let collectionItems = []; // cartes de la Collection chargées (pour « Publier »)
 
 // ---------------------------------------------------------------------------
 // Région (un seul site, filtre par région)
@@ -260,11 +261,12 @@ function tradeItemCard(t, context = 'trade') {
       <div class="card-actions">
         ${context === 'collection'
           ? (t.kind === 'trade'
-            ? `<button class="btn small" data-offer-trade="${t.id}" data-offered="${t.offered ? 0 : 1}">${t.offered ? 'Retirer de l’échange' : 'Proposer en échange'}</button>`
+            ? `<button class="btn small" data-offer-trade="${t.id}" data-offered="${t.offered ? 0 : 1}">${t.offered ? 'Retirer de l’échange' : 'Proposer en échange'}</button>
+               <button class="btn small" data-publish-trade="${t.id}">Publier</button>`
             : '')
           : `${!mine && me ? `<button class="btn small" data-contact-trade="${t.id}">Proposer un échange</button>` : ''}
         ${!mine && !me ? `<button class="btn small secondary" data-goto-account="1">Se connecter pour proposer</button>` : ''}
-        ${mine && t.kind === 'trade' && t.offered ? `<button class="btn secondary small" data-offer-trade="${t.id}" data-offered="0">Retirer de l’échange</button>` : ''}`}
+        ${mine && context !== 'collection' && t.kind === 'trade' && t.offered ? `<button class="btn secondary small" data-offer-trade="${t.id}" data-offered="0">Retirer de l’échange</button>` : ''}`}
         ${canDelete ? `<button class="btn danger small" data-delete-trade="${t.id}">Supprimer</button>` : ''}
       </div>
     </div>
@@ -326,12 +328,53 @@ async function loadTrade() {
 }
 
 async function loadCollection() {
-  if (!me) { $('#collectionGrid').innerHTML = ''; $('#collectionEmpty').hidden = false; return; }
+  if (!me) { collectionItems = []; $('#collectionGrid').innerHTML = ''; $('#collectionEmpty').hidden = false; return; }
   const params = new URLSearchParams();
   if ($('#collectionQ').value.trim()) params.set('q', $('#collectionQ').value.trim());
   const data = await api('/api/collection?' + params.toString());
+  collectionItems = data.items;
   $('#collectionGrid').innerHTML = data.items.map((t) => tradeItemCard(t, 'collection')).join('');
   $('#collectionEmpty').hidden = data.items.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Publier depuis la Collection : pré-remplit le formulaire de publication.
+// ---------------------------------------------------------------------------
+const LISTING_CONDITIONS = ['Neuf', 'Comme neuf', 'Excellent', 'Bon', 'Usé'];
+const MANABOX_CONDITIONS = {
+  'Near Mint': 'Comme neuf',
+  'Lightly Played': 'Excellent',
+  'Moderately Played': 'Bon',
+  'Heavily Played': 'Usé',
+  'Damaged': 'Usé',
+};
+function mapTradeCondition(c) {
+  const s = String(c || '').trim();
+  if (LISTING_CONDITIONS.includes(s)) return s;
+  return MANABOX_CONDITIONS[s] || 'Bon';
+}
+function mapTradeLanguage(l) {
+  const s = String(l || '').trim().toLowerCase();
+  if (s === 'en' || s === 'english' || s === 'anglais') return 'EN';
+  return 'FR';
+}
+function prefillPublishForm(id) {
+  const t = collectionItems.find((x) => x.id === id);
+  if (!t) { flash('Carte introuvable.', 'danger'); return; }
+  $('#fTitle').value = t.name || '';
+  $('#fEdition').value = t.set_name || t.set_code || '';
+  $('#fCondition').value = mapTradeCondition(t.condition);
+  $('#fLang').value = mapTradeLanguage(t.language);
+  $('#fFoil').value = t.foil ? '1' : '0';
+  $('#fPrice').value = t.market_cad_approx != null
+    ? Number(t.market_cad_approx).toFixed(2).replace('.', ',')
+    : '';
+  photoDataUrl = null;
+  $('#photoPreview').hidden = true;
+  const fileInput = $('#fPhoto');
+  if (fileInput) fileInput.value = '';
+  showView('publish');
+  flash('Formulaire pré-rempli depuis ta collection — vérifie le prix avant de publier.', 'ok');
 }
 
 async function importTradeCsv() {
@@ -738,6 +781,11 @@ document.addEventListener('click', async (e) => {
       if (document.getElementById('view-collection').classList.contains('active')) await loadCollection();
       else await loadTrade();
     } catch (err) { flash(err.message, 'danger'); }
+    return;
+  }
+  const publishTrade = e.target.closest('[data-publish-trade]');
+  if (publishTrade) {
+    prefillPublishForm(Number(publishTrade.dataset.publishTrade));
     return;
   }
   const viewBinder = e.target.closest('[data-view-binder]');
