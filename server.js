@@ -192,6 +192,18 @@ async function initDb() {
       await db.execute(`ALTER TABLE ${table} ADD COLUMN region TEXT NOT NULL DEFAULT '${DEFAULT_REGION}'`);
     }
   }
+
+  // Migration : type et rareté Scryfall dans card_prices (pour le tri et
+  // les filtres de la Collection). Additif uniquement, idempotente : les
+  // lignes existantes gardent leurs prix et sont enrichies au fil des
+  // visites (voir enqueuePrices).
+  const priceCols = await db.execute('PRAGMA table_info(card_prices)');
+  const priceColNames = priceCols.rows.map((r) => r.name);
+  for (const col of ['type_line', 'rarity']) {
+    if (!priceColNames.includes(col)) {
+      await db.execute(`ALTER TABLE card_prices ADD COLUMN ${col} TEXT`);
+    }
+  }
 }
 
 const nowIso = () => new Date().toISOString();
@@ -745,7 +757,8 @@ async function fetchJson(url) {
   });
 }
 
-// Prix d'une carte Scryfall (les prix sont des chaînes ou null côté Scryfall).
+// Données d'une carte Scryfall (les prix sont des chaînes ou null côté
+// Scryfall ; type_line et rarity servent au tri et aux filtres).
 async function fetchCardPrice(scryfallId) {
   const card = await fetchJson(`${SCRYFALL_API_BASE}/cards/${encodeURIComponent(scryfallId)}`);
   const p = card?.prices || {};
@@ -753,7 +766,13 @@ async function fetchCardPrice(scryfallId) {
     const n = typeof v === 'string' ? parseFloat(v) : v;
     return typeof n === 'number' && Number.isFinite(n) ? n : null;
   };
-  return { usd: num(p.usd), usd_foil: num(p.usd_foil), eur: num(p.eur) };
+  return {
+    usd: num(p.usd),
+    usd_foil: num(p.usd_foil),
+    eur: num(p.eur),
+    type_line: typeof card?.type_line === 'string' ? card.type_line.slice(0, 120) : null,
+    rarity: typeof card?.rarity === 'string' ? card.rarity.slice(0, 20) : null,
+  };
 }
 
 async function loadCachedPrices(ids) {
@@ -780,7 +799,14 @@ let priceWorkerActive = false;
 function enqueuePrices(ids, cache) {
   let added = false;
   for (const id of new Set(ids.filter(Boolean))) {
-    if (!isPriceFresh(cache.get(id)) && !priceQueue.has(id) && !priceInFlight.has(id)) {
+    const row = cache.get(id);
+    // Une ligne au prix frais mais sans type n'a jamais été enrichie
+    // (elle date d'avant les colonnes type_line/rarity) : on la
+    // ré-enfile une fois pour récupérer type et rareté. Pour une carte
+    // dont le fetch échoue toujours (identifiant inconnu), cela coûte
+    // au plus un appel par visite, sans jamais bloquer.
+    const needsType = !!row && row.type_line == null;
+    if ((!isPriceFresh(row) || needsType) && !priceQueue.has(id) && !priceInFlight.has(id)) {
       priceQueue.add(id);
       added = true;
     }
@@ -788,11 +814,12 @@ function enqueuePrices(ids, cache) {
   if (added) kickPriceWorker();
 }
 
-// Récupère un prix et l'enregistre. En cas d'échec, on enregistre quand même
-// fetched_at = maintenant avec des valeurs nulles : la carte ne sera pas
-// réessayée à chaque chargement, seulement après 24 h.
+// Récupère les données d'une carte et les enregistre. En cas d'échec, on
+// enregistre quand même fetched_at = maintenant avec des valeurs nulles :
+// la carte ne sera pas réessayée à chaque chargement, seulement après 24 h
+// (sauf pour le type, voir enqueuePrices).
 async function processPrice(id) {
-  let prices = { usd: null, usd_foil: null, eur: null };
+  let prices = { usd: null, usd_foil: null, eur: null, type_line: null, rarity: null };
   try {
     prices = await fetchCardPrice(id);
   } catch (e) {
@@ -800,9 +827,9 @@ async function processPrice(id) {
   }
   try {
     await db.execute({
-      sql: `INSERT OR REPLACE INTO card_prices (scryfall_id, usd, usd_foil, eur, fetched_at)
-            VALUES (?, ?, ?, ?, ?)`,
-      args: [id, prices.usd, prices.usd_foil, prices.eur, Date.now()],
+      sql: `INSERT OR REPLACE INTO card_prices (scryfall_id, usd, usd_foil, eur, type_line, rarity, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, prices.usd, prices.usd_foil, prices.eur, prices.type_line, prices.rarity, Date.now()],
     });
   } catch (e) {
     console.error(`Impossible d'enregistrer le prix de ${id} :`, e.message);
@@ -844,6 +871,45 @@ function marketValue(foil, priceRow) {
   return { market_usd: usd, market_cad_approx: Math.round(usd * USD_TO_CAD * 100) / 100 };
 }
 
+// Type principal d'une carte, en français, à partir de son type_line
+// Scryfall (« Legendary Creature — Human » → Créature,
+// « Artifact Creature — Golem » → Créature, « Basic Land — Forest » →
+// Terrain). On prend le dernier mot de type avant le tiret « — », en
+// ignorant les super-types ; tout autre mot → « Autre ». null si inconnu.
+const CARD_TYPE_LABELS = {
+  Creature: 'Créature',
+  Instant: 'Éphémère',
+  Sorcery: 'Rituel',
+  Artifact: 'Artefact',
+  Enchantment: 'Enchantement',
+  Land: 'Terrain',
+  Planeswalker: 'Planeswalker',
+  Battle: 'Bataille',
+  Kindred: 'Parenté',
+};
+const SUPER_TYPES = new Set(['Legendary', 'Basic', 'Snow', 'World']);
+function mainCardType(typeLine) {
+  if (typeof typeLine !== 'string' || !typeLine.trim()) return null;
+  const words = typeLine.split('—')[0].trim().split(/\s+/).filter((w) => !SUPER_TYPES.has(w));
+  const last = words[words.length - 1];
+  if (!last) return null;
+  return CARD_TYPE_LABELS[last] || 'Autre';
+}
+
+// Rareté en français, à partir de la rareté Scryfall. null si inconnue.
+const RARITY_LABELS = {
+  common: 'Commune',
+  uncommon: 'Peu commune',
+  rare: 'Rare',
+  mythic: 'Mythique',
+  special: 'Spéciale',
+  bonus: 'Spéciale',
+};
+function rarityLabel(r) {
+  if (typeof r !== 'string') return null;
+  return RARITY_LABELS[r.trim().toLowerCase()] || null;
+}
+
 function tradeItemView(r, priceRow) {
   return {
     id: r.id,
@@ -863,6 +929,8 @@ function tradeItemView(r, priceRow) {
     offered: !!r.offered,
     region: r.region || DEFAULT_REGION,
     created_at: r.created_at,
+    card_type: mainCardType(priceRow?.type_line),
+    rarity: rarityLabel(priceRow?.rarity),
     ...marketValue(!!r.foil, priceRow),
   };
 }

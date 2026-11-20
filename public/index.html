@@ -174,6 +174,56 @@
       <input id="collectionQ" type="search" placeholder="Rechercher dans ma collection…" aria-label="Rechercher dans ma collection">
       <button class="btn" id="collectionSearchBtn">Rechercher</button>
     </div>
+    <div class="meta" id="collectionTotal" hidden></div>
+    <div class="searchbar">
+      <select id="collectionSort" aria-label="Trier la collection">
+        <option value="recent">Plus récents</option>
+        <option value="price-asc">Prix croissant</option>
+        <option value="price-desc">Prix décroissant</option>
+        <option value="name-asc">Nom A→Z</option>
+        <option value="name-desc">Nom Z→A</option>
+        <option value="edition">Édition</option>
+        <option value="rarity">Rareté</option>
+      </select>
+      <select id="collectionType" aria-label="Filtrer par type de carte">
+        <option value="">Tous les types</option>
+        <option value="Créature">Créature</option>
+        <option value="Éphémère">Éphémère</option>
+        <option value="Rituel">Rituel</option>
+        <option value="Artefact">Artefact</option>
+        <option value="Enchantement">Enchantement</option>
+        <option value="Terrain">Terrain</option>
+        <option value="Planeswalker">Planeswalker</option>
+        <option value="Bataille">Bataille</option>
+        <option value="Parenté">Parenté</option>
+        <option value="Autre">Autre</option>
+        <option value="unknown">Type inconnu</option>
+      </select>
+      <select id="collectionRarity" aria-label="Filtrer par rareté">
+        <option value="">Toutes les raretés</option>
+        <option value="Commune">Commune</option>
+        <option value="Peu commune">Peu commune</option>
+        <option value="Rare">Rare</option>
+        <option value="Mythique">Mythique</option>
+        <option value="Spéciale">Spéciale</option>
+      </select>
+      <select id="collectionFoil" aria-label="Filtrer par foil">
+        <option value="">Foil et non foil</option>
+        <option value="1">Foil</option>
+        <option value="0">Non foil</option>
+      </select>
+      <select id="collectionCondition" aria-label="Filtrer par état">
+        <option value="">Tous les états</option>
+      </select>
+      <select id="collectionLanguage" aria-label="Filtrer par langue">
+        <option value="">Toutes les langues</option>
+      </select>
+      <select id="collectionOffered" aria-label="Filtrer par offre en échange">
+        <option value="">Proposées ou non</option>
+        <option value="1">Proposées en échange</option>
+        <option value="0">Non proposées</option>
+      </select>
+    </div>
     <div id="collectionGrid" class="grid"></div>
     <div id="collectionEmpty" class="empty" hidden>Votre collection est vide. Importez votre collection ManaBox depuis la section Échange.</div>
   </section>

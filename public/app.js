@@ -250,6 +250,8 @@ function tradeItemCard(t, context = 'trade') {
       <div class="metaline">
         <span class="chip ${t.kind === 'want' ? 'want' : ''}">${t.kind === 'want' ? 'Recherché' : 'À échanger'}</span>
         ${context === 'collection' && t.kind === 'trade' && t.offered ? '<span class="chip offered">En échange</span>' : ''}
+        ${t.card_type ? `<span class="chip">${escapeHtml(t.card_type)}</span>` : (context === 'collection' ? '<span class="chip">Type inconnu</span>' : '')}
+        ${t.rarity ? `<span class="chip">${escapeHtml(t.rarity)}</span>` : ''}
         ${t.condition ? `<span class="chip">${escapeHtml(t.condition)}</span>` : ''}
         ${t.language ? `<span class="chip">${escapeHtml(langLabel(t.language))}</span>` : ''}
         ${t.foil ? '<span class="chip">Foil</span>' : ''}
@@ -327,14 +329,126 @@ async function loadTrade() {
   $('#tradeEmpty').hidden = items.length > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Tri et filtres de la Collection (côté client : l'API renvoie toute la
+// collection d'un coup, sans pagination, donc le tri et le filtrage sont
+// instantanés et ne rechargent pas les données).
+// ---------------------------------------------------------------------------
+const RARITY_RANK = { Mythique: 4, Rare: 3, 'Peu commune': 2, Commune: 1, 'Spéciale': 0 };
+function collectionPrice(t) {
+  return t.market_cad_approx != null ? Number(t.market_cad_approx) : null;
+}
+function sortCollection(items) {
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name), 'fr');
+  const sorted = [...items];
+  switch ($('#collectionSort').value) {
+    case 'price-asc':
+      sorted.sort((a, b) => {
+        const pa = collectionPrice(a), pb = collectionPrice(b);
+        if (pa == null && pb == null) return byName(a, b);
+        if (pa == null) return 1; // sans prix : à la fin
+        if (pb == null) return -1;
+        return pa - pb || byName(a, b);
+      });
+      break;
+    case 'price-desc':
+      sorted.sort((a, b) => {
+        const pa = collectionPrice(a), pb = collectionPrice(b);
+        if (pa == null && pb == null) return byName(a, b);
+        if (pa == null) return 1; // sans prix : à la fin, dans les deux sens
+        if (pb == null) return -1;
+        return pb - pa || byName(a, b);
+      });
+      break;
+    case 'name-asc': sorted.sort(byName); break;
+    case 'name-desc': sorted.sort((a, b) => byName(b, a)); break;
+    case 'edition':
+      sorted.sort((a, b) => String(a.set_name || '').localeCompare(String(b.set_name || ''), 'fr') || byName(a, b));
+      break;
+    case 'rarity': {
+      const rank = (t) => (t.rarity != null && RARITY_RANK[t.rarity] != null ? RARITY_RANK[t.rarity] : -1);
+      sorted.sort((a, b) => rank(b) - rank(a) || byName(a, b));
+      break;
+    }
+    default: // 'recent' : ordre du serveur (plus récents d'abord), on ne retouche pas
+      break;
+  }
+  return sorted;
+}
+function filterCollection(items) {
+  const type = $('#collectionType').value;
+  const rarity = $('#collectionRarity').value;
+  const foil = $('#collectionFoil').value;
+  const condition = $('#collectionCondition').value;
+  const language = $('#collectionLanguage').value;
+  const offered = $('#collectionOffered').value;
+  return items.filter((t) =>
+    (type === '' || (type === 'unknown' ? t.card_type == null : t.card_type === type)) &&
+    (rarity === '' || t.rarity === rarity) &&
+    (foil === '' || (t.foil ? '1' : '0') === foil) &&
+    (condition === '' || t.condition === condition) &&
+    (language === '' || t.language === language) &&
+    (offered === '' || (t.offered ? '1' : '0') === offered));
+}
+function renderCollection() {
+  const items = filterCollection(sortCollection(collectionItems));
+  $('#collectionGrid').innerHTML = items.map((t) => tradeItemCard(t, 'collection')).join('');
+  const empty = $('#collectionEmpty');
+  if (collectionItems.length === 0) {
+    empty.textContent = 'Votre collection est vide. Importez votre collection ManaBox depuis la section Échange.';
+    empty.hidden = false;
+  } else if (items.length === 0) {
+    empty.textContent = 'Aucune carte ne correspond à ces critères. Modifiez le tri ou les filtres.';
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+  }
+  // Valeur totale de la collection chargée (prix × quantité, cartes avec
+  // une valeur connue seulement).
+  const totalEl = $('#collectionTotal');
+  if (collectionItems.length === 0) {
+    totalEl.hidden = true;
+  } else {
+    let total = 0;
+    let count = 0;
+    for (const t of collectionItems) {
+      count += Number(t.quantity) || 0;
+      const p = collectionPrice(t);
+      if (p != null) total += p * (Number(t.quantity) || 0);
+    }
+    totalEl.textContent = `Valeur totale : ≈ ${moneyCad(total)} CA · ${count} carte${count > 1 ? 's' : ''}`;
+    totalEl.hidden = false;
+  }
+}
+// Options dynamiques (état, langue) à partir des cartes chargées ; le
+// choix en cours est conservé quand il existe encore.
+function rebuildCollectionFilterOptions() {
+  for (const [id, values] of [
+    ['collectionCondition', [...new Set(collectionItems.map((t) => t.condition).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'))],
+    ['collectionLanguage', [...new Set(collectionItems.map((t) => t.language).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'))],
+  ]) {
+    const sel = $(`#${id}`);
+    const prev = sel.value;
+    const first = sel.options[0];
+    sel.innerHTML = '';
+    sel.appendChild(first);
+    for (const v of values) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = id === 'collectionLanguage' ? (langLabel(v) || v) : v;
+      sel.appendChild(opt);
+    }
+    sel.value = values.includes(prev) ? prev : '';
+  }
+}
 async function loadCollection() {
-  if (!me) { collectionItems = []; $('#collectionGrid').innerHTML = ''; $('#collectionEmpty').hidden = false; return; }
+  if (!me) { collectionItems = []; renderCollection(); return; }
   const params = new URLSearchParams();
   if ($('#collectionQ').value.trim()) params.set('q', $('#collectionQ').value.trim());
   const data = await api('/api/collection?' + params.toString());
   collectionItems = data.items;
-  $('#collectionGrid').innerHTML = data.items.map((t) => tradeItemCard(t, 'collection')).join('');
-  $('#collectionEmpty').hidden = data.items.length > 0;
+  rebuildCollectionFilterOptions();
+  renderCollection();
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +519,10 @@ function initTrade() {
   $('#tradeKind').addEventListener('change', loadTrade);
   $('#collectionSearchBtn').addEventListener('click', loadCollection);
   $('#collectionQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadCollection(); });
+  // Tri et filtres : re-rendu instantané côté client, sans recharger.
+  for (const id of ['collectionSort', 'collectionType', 'collectionRarity', 'collectionFoil', 'collectionCondition', 'collectionLanguage', 'collectionOffered']) {
+    $(`#${id}`).addEventListener('change', renderCollection);
+  }
   $('#tradeManualForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
