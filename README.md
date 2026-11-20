@@ -27,7 +27,11 @@ entre joueurs de Rouyn-Noranda. Échange en personne, **aucun paiement en ligne*
   proposés en échange que si le joueur les sélectionne), les listes
   deviennent des cartes « Recherché ». L’import remplace la collection
   actuelle, donc on réimporte pour la mettre à jour ; les choix d’échange
-  sont conservés lors d’un réimport. Tri (prix, nom, édition, rareté, plus
+  sont conservés lors d’un réimport. On peut aussi ajouter des cartes une
+  par une avec le formulaire « Ajouter une carte manuellement » (la carte
+  arrive non proposée ; son image et sa valeur de marché sont retrouvées
+  automatiquement sur Scryfall d’après son nom et son édition quand c’est
+  possible). Tri (prix, nom, édition, rareté, plus
   récents), filtres (type, rareté, foil, état, langue, proposées ou non) et
   valeur totale affichée. Bouton « Publier » sur chaque carte pour créer
   une annonce pré-remplie, avec l’image officielle de la carte.

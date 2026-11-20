@@ -170,6 +170,63 @@
       <button class="btn" id="tradeImportBtn" type="button" style="margin-top:.6rem">Importer ma collection ManaBox</button>
       <div id="tradeImportResult" class="meta" style="margin-top:.6rem"></div>
     </div>
+    <div class="panel" id="collectionManualPanel" hidden>
+      <h2>Ajouter une carte manuellement</h2>
+      <p class="meta">Ajoutez une carte à votre Collection sans réimporter tout votre CSV. La carte n’est pas proposée en échange tant que vous ne la sélectionnez pas ; son image et sa valeur de marché sont retrouvées automatiquement quand c’est possible.</p>
+      <form id="collectionManualForm">
+        <label for="cName">Nom de la carte *</label>
+        <input id="cName" required maxlength="120" placeholder="Ex. : Sol Ring">
+        <div class="row">
+          <div style="flex:2">
+            <label for="cSetName">Édition</label>
+            <input id="cSetName" maxlength="120" placeholder="Ex. : Commander Masters">
+          </div>
+          <div style="flex:1">
+            <label for="cSetCode">Code d’édition</label>
+            <input id="cSetCode" maxlength="20" placeholder="Ex. : CMM">
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="cCollector">Nº de collection</label>
+            <input id="cCollector" maxlength="20" placeholder="Ex. : 123">
+          </div>
+          <div style="flex:1">
+            <label for="cQuantity">Quantité</label>
+            <input id="cQuantity" type="number" min="1" max="999" value="1">
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="cCondition">État</label>
+            <select id="cCondition">
+              <option value="">—</option>
+              <option>Neuf</option>
+              <option>Comme neuf</option>
+              <option>Excellent</option>
+              <option>Bon</option>
+              <option>Usé</option>
+              <option>Near Mint</option>
+              <option>Lightly Played</option>
+              <option>Moderately Played</option>
+              <option>Heavily Played</option>
+              <option>Damaged</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label for="cLang">Langue</label>
+            <select id="cLang"><option value="FR">Français</option><option value="EN">Anglais</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label for="cFoil">Foil ?</label>
+            <select id="cFoil"><option value="0">Non</option><option value="1">Oui</option></select>
+          </div>
+        </div>
+        <button class="btn block" type="submit">Ajouter à ma collection</button>
+      </form>
+    </div>
     <div class="searchbar">
       <input id="collectionQ" type="search" placeholder="Rechercher dans ma collection…" aria-label="Rechercher dans ma collection">
       <button class="btn" id="collectionSearchBtn">Rechercher</button>

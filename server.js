@@ -27,6 +27,9 @@ const PRICE_FETCH_DELAY_MS = 200; // ~5 appels/s, sous la limite demandée par S
 // locaux (pointer vers un faux serveur) ; en production, l'API réelle.
 const SCRYFALL_API_BASE = (process.env.SCRYFALL_API_BASE || 'https://api.scryfall.com').replace(/\/$/, '');
 const SCRYFALL_USER_AGENT = 'Hidden-Magic/1.0';
+// Délai maximal de la résolution Scryfall par nom (ajout manuel) : au-delà,
+// la carte est créée sans identifiant. Variable d'env pour les tests.
+const SCRYFALL_RESOLVE_TIMEOUT_MS = Number(process.env.SCRYFALL_RESOLVE_TIMEOUT_MS || 4000);
 
 const db = (() => {
   const url = (process.env.TURSO_DATABASE_URL || '').trim();
@@ -745,26 +748,56 @@ api.post('/conversations/:id/messages', requireAuth, requireNotBlocked, asyncHan
 // donc le système se répare seul après un redémarrage (le service gratuit
 // Render s'endort après 15 min d'inactivité). Les minuteurs sont en unref()
 // pour ne pas retenir le processus (tests).
-async function fetchJson(url) {
+async function fetchJson(url, timeoutMs = 0) {
   if (typeof globalThis.fetch === 'function') {
-    const res = await globalThis.fetch(url, {
-      headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' },
-    });
-    if (!res.ok) throw new Error(`Scryfall ${res.status}`);
-    return res.json();
+    const ctrl = timeoutMs > 0 ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await globalThis.fetch(url, {
+        headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' },
+        ...(ctrl ? { signal: ctrl.signal } : {}),
+      });
+      if (!res.ok) throw new Error(`Scryfall ${res.status}`);
+      return res.json();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
   // Repli Node < 18 (sans fetch global) : module https.
   const https = require('node:https');
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': SCRYFALL_USER_AGENT, Accept: 'application/json' } }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => {
         if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(`Scryfall ${res.statusCode}`));
         try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    if (timeoutMs > 0) req.setTimeout(timeoutMs, () => req.destroy(new Error('Scryfall timeout')));
   });
+}
+
+// Résout l'identifiant Scryfall d'une carte d'après son nom et son édition
+// (ajout manuel). Le paramètre `set` de /cards/named accepte un code
+// d'édition (ex. CMM) ou un nom d'édition (ex. « Commander Masters ») ;
+// sans édition, Scryfall renvoie une impression de la carte (la plus
+// récente en général). Si plusieurs impressions correspondent dans la même
+// édition (ex. art alternatif), Scryfall en renvoie une seule — la carte
+// reste la bonne, seule l'image peut différer légèrement. Ne lève jamais
+// d'exception : échec, absence de résultat ou dépassement du délai → null.
+async function resolveScryfallId(name, setCode, setName) {
+  try {
+    const params = new URLSearchParams({ exact: name });
+    const set = (setCode || setName || '').trim();
+    if (set) params.set('set', set);
+    const card = await fetchJson(`${SCRYFALL_API_BASE}/cards/named?${params.toString()}`, SCRYFALL_RESOLVE_TIMEOUT_MS);
+    const id = typeof card?.id === 'string' ? card.id.trim() : '';
+    return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Données d'une carte Scryfall (les prix sont des chaînes ou null côté
@@ -1201,11 +1234,27 @@ api.post('/trade', requireAuth, requireNotBlocked, asyncHandler(async (req, res)
   if (!Number.isFinite(quantity) || quantity < 1) quantity = 1;
   if (quantity > 999) quantity = 999;
   if (name.length < 2 || name.length > 120) return res.status(400).json({ error: 'Le nom de la carte est requis (2 à 120 caractères).' });
+  // « offered » : 0 ou 1 (défaut 1). Les cartes « Recherché » sont toujours
+  // proposées ; l'ajout manuel depuis la Collection envoie 0 (la carte
+  // arrive dans la Collection, non proposée en échange).
+  const rawOffered = req.body?.offered;
+  let offered = 1;
+  if (rawOffered !== undefined && rawOffered !== null) {
+    if (rawOffered === 1 || rawOffered === true || rawOffered === '1') offered = 1;
+    else if (rawOffered === 0 || rawOffered === false || rawOffered === '0') offered = 0;
+    else return res.status(400).json({ error: 'Valeur « offered » invalide.' });
+  }
+  if (kind === 'want') offered = 1;
+  // Résolution Scryfall (ajout manuel sans identifiant) : l'image, le
+  // type/rareté et la valeur de marché suivent ensuite, comme pour un
+  // import. Ne bloque jamais la création (voir resolveScryfallId).
+  const scryfallId = await resolveScryfallId(name, setCode, setName);
   const r = await db.execute({
     sql: `INSERT INTO trade_items (user_id, name, set_code, set_name, collector_number, foil, condition, language, quantity, scryfall_id, binder_name, kind, offered, region, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 1, ?, ?)`,
-    args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, binderName, kind, req.user.region || DEFAULT_REGION, nowIso()],
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [req.user.id, name, setCode, setName, collectorNumber, foil, condition, language, quantity, scryfallId || '', binderName, kind, offered, req.user.region || DEFAULT_REGION, nowIso()],
   });
+  if (scryfallId) ensurePrices([scryfallId]);
   const rows = await db.execute({ sql: `${TRADE_SELECT} WHERE t.id = ?`, args: [Number(r.lastInsertRowid)] });
   res.status(201).json({ item: tradeItemView(rows.rows[0]) });
 }));

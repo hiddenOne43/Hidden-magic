@@ -442,6 +442,7 @@ function rebuildCollectionFilterOptions() {
 }
 async function loadCollection() {
   $('#tradeImportPanel').hidden = !me;
+  $('#collectionManualPanel').hidden = !me;
   if (!me) { collectionItems = []; renderCollection(); return; }
   const params = new URLSearchParams();
   if ($('#collectionQ').value.trim()) params.set('q', $('#collectionQ').value.trim());
@@ -548,6 +549,35 @@ function initTrade() {
       e.target.reset();
       $('#tQuantity').value = '1';
       await loadTrade();
+    } catch (err) {
+      flash(err.message, 'danger');
+    }
+  });
+  // Ajout manuel dans la Collection : la carte arrive non proposée
+  // (offered=0) ; elle n'apparaît dans l'Échange que si le joueur la
+  // propose ensuite avec « Proposer en échange ».
+  $('#collectionManualForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/api/trade', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: $('#cName').value.trim(),
+          set_name: $('#cSetName').value.trim(),
+          set_code: $('#cSetCode').value.trim(),
+          collector_number: $('#cCollector').value.trim(),
+          quantity: $('#cQuantity').value,
+          condition: $('#cCondition').value,
+          language: $('#cLang').value,
+          kind: 'trade',
+          foil: $('#cFoil').value === '1',
+          offered: 0,
+        }),
+      });
+      flash(`« ${data.item.name} » ajouté à votre collection.`, 'ok');
+      e.target.reset();
+      $('#cQuantity').value = '1';
+      await loadCollection();
     } catch (err) {
       flash(err.message, 'danger');
     }
