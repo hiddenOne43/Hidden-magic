@@ -394,7 +394,7 @@ function renderCollection() {
   $('#collectionGrid').innerHTML = items.map((t) => tradeItemCard(t, 'collection')).join('');
   const empty = $('#collectionEmpty');
   if (collectionItems.length === 0) {
-    empty.textContent = 'Votre collection est vide. Importez votre collection ManaBox depuis la section Échange.';
+    empty.textContent = 'Votre collection est vide. Importez votre collection ManaBox avec le bouton ci-dessus.';
     empty.hidden = false;
   } else if (items.length === 0) {
     empty.textContent = 'Aucune carte ne correspond à ces critères. Modifiez le tri ou les filtres.';
