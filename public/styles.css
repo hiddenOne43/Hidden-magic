@@ -172,6 +172,7 @@ th { color: var(--muted); font-weight: 600; }
 .conv .last { color: var(--muted); font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 footer { text-align: center; color: var(--muted); font-size: .82rem; padding: 1.5rem 1rem 2.5rem; }
 .photo-preview { max-width: 100%; border-radius: 12px; margin-top: .6rem; border: 1px solid var(--border); }
+#photoRemoveBtn { margin-top: .5rem; }
 @media (min-width: 720px) {
   .hero h1 { font-size: 2rem; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }

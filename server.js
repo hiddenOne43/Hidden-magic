@@ -515,6 +515,14 @@ api.get('/listings/:id', asyncHandler(async (req, res) => {
   res.json({ listing: listingView(rows.rows[0]) });
 }));
 
+// URL d'image Scryfall acceptée comme photo d'annonce : l'image officielle
+// de la carte, mise automatiquement quand on publie depuis la Collection.
+// Seules les URL Scryfall sont acceptées (jamais une URL quelconque).
+function isScryfallImageUrl(u) {
+  return /^https:\/\/api\.scryfall\.com\/cards\/[0-9a-f-]+\?format=image&version=(small|normal|large|png|art_crop|border_crop)$/.test(u)
+    || /^https:\/\/cards\.scryfall\.io\/(small|normal|large|png|art_crop|border_crop)\/front\/[0-9a-f]\/[0-9a-f]\/[0-9a-f-]+\.(jpg|jpeg|png)$/.test(u);
+}
+
 api.post('/listings', requireAuth, requireNotBlocked, asyncHandler(async (req, res) => {
   const title = String(req.body?.title || '').trim();
   const edition = String(req.body?.edition || '').trim();
@@ -529,10 +537,12 @@ api.post('/listings', requireAuth, requireNotBlocked, asyncHandler(async (req, r
   if (!CONDITIONS.includes(condition)) return res.status(400).json({ error: 'État invalide.' });
   if (!Number.isFinite(price) || price < 0 || price > 100000) return res.status(400).json({ error: 'Prix invalide (en dollars canadiens).' });
   if (photo) {
-    if (!/^data:image\/(jpeg|png|webp);base64,/.test(photo)) {
-      return res.status(400).json({ error: 'La photo doit être une image JPEG, PNG ou WebP.' });
+    const isData = /^data:image\/(jpeg|png|webp);base64,/.test(photo);
+    const isScryfall = isScryfallImageUrl(photo);
+    if (!isData && !isScryfall) {
+      return res.status(400).json({ error: 'La photo doit être une image JPEG, PNG ou WebP, ou une image officielle Scryfall.' });
     }
-    if (photo.length > MAX_PHOTO_CHARS) {
+    if (isData && photo.length > MAX_PHOTO_CHARS) {
       return res.status(400).json({ error: 'La photo est trop lourde. Choisissez une image plus petite.' });
     }
   }

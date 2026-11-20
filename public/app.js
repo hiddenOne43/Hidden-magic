@@ -472,6 +472,10 @@ function mapTradeLanguage(l) {
   if (s === 'en' || s === 'english' || s === 'anglais') return 'EN';
   return 'FR';
 }
+// URL de l'image officielle Scryfall d'une carte (miniature ou grand format).
+function scryfallImageUrl(id, version) {
+  return `https://api.scryfall.com/cards/${encodeURIComponent(id)}?format=image&version=${version}`;
+}
 function prefillPublishForm(id) {
   const t = collectionItems.find((x) => x.id === id);
   if (!t) { flash('Carte introuvable.', 'danger'); return; }
@@ -483,10 +487,10 @@ function prefillPublishForm(id) {
   $('#fPrice').value = t.market_cad_approx != null
     ? Number(t.market_cad_approx).toFixed(2).replace('.', ',')
     : '';
-  photoDataUrl = null;
-  $('#photoPreview').hidden = true;
-  const fileInput = $('#fPhoto');
-  if (fileInput) fileInput.value = '';
+  // Image automatique : l'image officielle Scryfall de la carte, en grand
+  // format. Sans identifiant Scryfall, la photo reste à ajouter à la main.
+  clearPublishPhoto();
+  if (t.scryfall_id) setPublishPhoto(scryfallImageUrl(t.scryfall_id, 'normal'), true);
   showView('publish');
   flash('Formulaire pré-rempli depuis ta collection — vérifie le prix avant de publier.', 'ok');
 }
@@ -614,20 +618,39 @@ function resizePhoto(file) {
   });
 }
 
+// Photo de l'annonce : soit une image base64 (photo du vendeur), soit
+// l'URL de l'image officielle Scryfall (publication depuis la Collection).
+// isAuto=true affiche la note « image officielle ».
+function setPublishPhoto(src, isAuto) {
+  photoDataUrl = src;
+  const prev = $('#photoPreview');
+  prev.src = src;
+  prev.hidden = false;
+  $('#photoNote').hidden = !isAuto;
+  $('#photoRemoveBtn').hidden = false;
+}
+function clearPublishPhoto() {
+  photoDataUrl = null;
+  $('#photoPreview').hidden = true;
+  $('#photoNote').hidden = true;
+  $('#photoRemoveBtn').hidden = true;
+  const fileInput = $('#fPhoto');
+  if (fileInput) fileInput.value = '';
+}
+
 async function initPublish() {
   $('#fPhoto').addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    photoDataUrl = null;
-    $('#photoPreview').hidden = true;
-    if (!file) return;
+    if (!file) return; // annulation du sélecteur : on garde la photo en cours
     try {
-      photoDataUrl = await resizePhoto(file);
-      const prev = $('#photoPreview');
-      prev.src = photoDataUrl;
-      prev.hidden = false;
+      // La photo choisie par le vendeur prime sur l'image automatique.
+      setPublishPhoto(await resizePhoto(file), false);
     } catch (err) {
       flash(err.message, 'danger');
     }
+  });
+  $('#photoRemoveBtn').addEventListener('click', () => {
+    clearPublishPhoto();
   });
   $('#publishForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -646,8 +669,7 @@ async function initPublish() {
       });
       flash(`Annonce « ${data.listing.title} » publiée !`, 'ok');
       e.target.reset();
-      photoDataUrl = null;
-      $('#photoPreview').hidden = true;
+      clearPublishPhoto();
       await loadMyListings();
       showView('market');
       await loadMarket();
