@@ -287,7 +287,6 @@ async function loadBinders() {
 }
 
 async function loadTrade() {
-  $('#tradeImportPanel').hidden = !me;
   $('#tradeManualPanel').hidden = !me;
   $('#tradeLoginHint').hidden = !!me;
   await loadBinders();
@@ -442,6 +441,7 @@ function rebuildCollectionFilterOptions() {
   }
 }
 async function loadCollection() {
+  $('#tradeImportPanel').hidden = !me;
   if (!me) { collectionItems = []; renderCollection(); return; }
   const params = new URLSearchParams();
   if ($('#collectionQ').value.trim()) params.set('q', $('#collectionQ').value.trim());
@@ -507,7 +507,7 @@ async function importTradeCsv() {
     $('#tradeImportResult').textContent =
       `${data.imported} carte(s) importée(s) : ${data.trade} dans votre Collection, ${data.want} recherchée(s). ${data.skipped} ligne(s) ignorée(s). Les cartes de la Collection ne sont proposées en échange que si vous les sélectionnez.${data.offered ? ` ${data.offered} carte(s) restent proposée(s) en échange.` : ''}`;
     flash(`Import terminé : ${data.imported} carte(s) importée(s).`, 'ok');
-    await loadTrade();
+    await loadCollection();
   } catch (e) {
     flash(e.message, 'danger');
   } finally {

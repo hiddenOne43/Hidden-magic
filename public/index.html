@@ -76,15 +76,7 @@
       <p>Publiez votre collection à échanger et consultez celle des autres joueurs. Proposez un échange par messagerie privée — aucun paiement en ligne.</p>
       <p class="meta">Valeurs indicatives du marché (TCGplayer via Scryfall, conversion approximative en $ CA, mises à jour chaque jour).</p>
     </div>
-    <p class="meta" id="tradeLoginHint">Connectez-vous pour importer votre collection ou ajouter des cartes à échanger.</p>
-    <div class="panel" id="tradeImportPanel" hidden>
-      <h2>Ma collection à échanger</h2>
-      <p class="meta">Importez votre collection ManaBox : dans ManaBox, onglet Collection → menu en haut à droite → Exporter → CSV. L’import remplace votre collection actuelle sur le site (réimportez pour la mettre à jour). Les classeurs rejoignent votre Collection (ils ne sont proposés en échange que si vous les sélectionnez), les listes deviennent des cartes « Recherché ». Vos choix d’échange sont conservés lors d’un réimport. Les cartes importées prennent la région de votre compte.</p>
-      <label for="tradeCsvFile">Fichier CSV ManaBox (.csv)</label>
-      <input id="tradeCsvFile" type="file" accept=".csv,text/csv">
-      <button class="btn" id="tradeImportBtn" type="button" style="margin-top:.6rem">Importer ma collection ManaBox</button>
-      <div id="tradeImportResult" class="meta" style="margin-top:.6rem"></div>
-    </div>
+    <p class="meta" id="tradeLoginHint">Connectez-vous pour ajouter des cartes à échanger.</p>
     <div class="panel" id="tradeManualPanel" hidden>
       <h2>Ajouter une carte manuellement</h2>
       <form id="tradeManualForm">
@@ -160,7 +152,7 @@
       <button class="btn" id="tradeSearchBtn">Rechercher</button>
     </div>
     <div id="tradeGrid" class="grid"></div>
-    <div id="tradeEmpty" class="empty" hidden>Aucune carte à échanger pour le moment. Importez votre collection ManaBox ou ajoutez une carte !</div>
+    <div id="tradeEmpty" class="empty" hidden>Aucune carte à échanger pour le moment. Ajoutez une carte, ou importez votre collection depuis la section Collection !</div>
   </section>
 
   <!-- Collection -->
@@ -169,6 +161,14 @@
       <h1>Ma collection</h1>
       <p>Toutes vos cartes importées. Choisissez celles que vous proposez en échange : elles apparaîtront alors dans la section Échange, visibles par tous les joueurs.</p>
       <p class="meta">Valeurs indicatives du marché (TCGplayer via Scryfall, conversion approximative en $ CA, mises à jour chaque jour).</p>
+    </div>
+    <div class="panel" id="tradeImportPanel" hidden>
+      <h2>Importer ma collection ManaBox</h2>
+      <p class="meta">Importez votre collection ManaBox : dans ManaBox, onglet Collection → menu en haut à droite → Exporter → CSV. L’import remplace votre collection actuelle sur le site (réimportez pour la mettre à jour). Les classeurs rejoignent votre Collection (ils ne sont proposés en échange que si vous les sélectionnez), les listes deviennent des cartes « Recherché ». Vos choix d’échange sont conservés lors d’un réimport. Les cartes importées prennent la région de votre compte.</p>
+      <label for="tradeCsvFile">Fichier CSV ManaBox (.csv)</label>
+      <input id="tradeCsvFile" type="file" accept=".csv,text/csv">
+      <button class="btn" id="tradeImportBtn" type="button" style="margin-top:.6rem">Importer ma collection ManaBox</button>
+      <div id="tradeImportResult" class="meta" style="margin-top:.6rem"></div>
     </div>
     <div class="searchbar">
       <input id="collectionQ" type="search" placeholder="Rechercher dans ma collection…" aria-label="Rechercher dans ma collection">
